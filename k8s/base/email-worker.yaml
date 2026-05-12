@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-worker
+  labels: { app: email-worker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: email-worker }
+  template:
+    metadata:
+      labels: { app: email-worker }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: email-worker
+          image: ghcr.io/dsofikitis/reliability-lab/email-worker:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: LISTEN_ADDR_HTTP, value: ":8080" }
+            - { name: NATS_URL,         value: "nats://nats:4222" }
+            - { name: NATS_SUBJECT,     value: "orders.events.created" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            # Memory limit is intentionally tight so the OOM chaos
+            # experiment has somewhere to push the worker over. The
+            # gke overlay raises this for non-chaos workloads.
+            limits:   { cpu: 500m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: email-worker
+spec:
+  selector: { app: email-worker }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

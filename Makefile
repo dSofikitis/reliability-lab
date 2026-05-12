@@ -55,15 +55,21 @@ images: ## docker build every service image and tag with $(IMAGE_TAG).
 	done
 
 ##@ Cluster (phase 4)
-.PHONY: kind-up kind-down apply
-kind-up: ## Create a 3-node kind cluster and load images.
-	@echo "[phase 4] kind-up not yet wired"
+.PHONY: kind-up kind-down kind-load apply
+kind-up: ## Create the 3-node kind cluster.
+	kind create cluster --config k8s/kind-cluster.yaml
 
 kind-down: ## Destroy the kind cluster.
-	@echo "[phase 4] kind-down not yet wired"
+	kind delete cluster --name reliability-lab
+
+kind-load: ## docker save + kind load every service image into the cluster.
+	@for svc in $(SERVICES); do \
+	  echo "load $$svc"; \
+	  kind load docker-image $(IMAGE_REGISTRY)/$$svc:$(IMAGE_TAG) --name reliability-lab; \
+	done
 
 apply: ## kubectl apply -k k8s/overlays/$(CLUSTER)
-	@echo "[phase 4] apply not yet wired"
+	kubectl apply -k k8s/overlays/$(CLUSTER)
 
 ##@ Stack installs (phase 5-11)
 .PHONY: mesh-install obs-install chaos-install rollouts-install policy-install

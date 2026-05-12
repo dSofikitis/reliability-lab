@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reliability-lab
+  labels:
+    # The mesh-install target adds linkerd.io/inject=enabled here in
+    # phase 5; until then the pods run unmeshed and Prometheus scrapes
+    # them directly.
+    name: reliability-lab

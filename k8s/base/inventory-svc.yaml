@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-svc
+  labels: { app: inventory-svc }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: inventory-svc }
+  template:
+    metadata:
+      labels: { app: inventory-svc }
+      annotations:
+        # phase 6 prometheus.io scrape (the ServiceMonitor takes over
+        # once kube-prometheus-stack is installed; these are a
+        # fallback for the bare-Prom setup in `make demo`).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: inventory-svc
+          image: ghcr.io/dsofikitis/reliability-lab/inventory-svc:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: grpc, containerPort: 9000 }
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: LISTEN_ADDR_GRPC, value: ":9000" }
+            - { name: LISTEN_ADDR_HTTP, value: ":8080" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-svc
+spec:
+  selector: { app: inventory-svc }
+  ports:
+    - { name: grpc, port: 9000, targetPort: grpc }
+    - { name: http, port: 8080, targetPort: http }

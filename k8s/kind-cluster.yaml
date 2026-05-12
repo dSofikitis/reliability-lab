@@ -1,0 +1,16 @@
+# A small 3-node kind cluster, just big enough to test multi-pod
+# scheduling and node-level chaos (pod-kill that depends on draining
+# replicas to a different node).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: reliability-lab
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Expose orders-svc via a NodePort patch on the kind overlay
+      # for `curl localhost:31080/orders`.
+      - containerPort: 31080
+        hostPort: 8080
+        protocol: TCP
+  - role: worker
+  - role: worker

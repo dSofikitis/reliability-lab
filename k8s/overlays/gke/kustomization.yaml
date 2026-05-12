@@ -1,0 +1,36 @@
+# GKE Autopilot overlay — production-shaped replica counts and a
+# clustered 3-replica NATS. Image tag is patched in CI to the build
+# SHA so deployments are reproducible.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target: { kind: Deployment, name: orders-svc }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target: { kind: Deployment, name: payments-svc }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  - target: { kind: Deployment, name: inventory-svc }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target: { kind: Deployment, name: email-worker }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+  - target: { kind: StatefulSet, name: nats }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3

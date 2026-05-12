@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-svc
+  labels: { app: orders-svc }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: orders-svc }
+  template:
+    metadata:
+      labels: { app: orders-svc }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: orders-svc
+          image: ghcr.io/dsofikitis/reliability-lab/orders-svc:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: LISTEN_ADDR_HTTP, value: ":8080" }
+            - { name: PAYMENTS_ADDR,    value: "payments-svc:9000" }
+            - { name: NATS_URL,         value: "nats://nats:4222" }
+            - { name: NATS_SUBJECT,     value: "orders.events.created" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits:   { cpu: 1,    memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-svc
+spec:
+  selector: { app: orders-svc }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+# Circuit-break ConfigMap. The remediation-operator's third remedy
+# patches `publish_enabled: "false"` here when the email-worker's
+# SLO breaks. orders-svc watches this ConfigMap (phase 9) and pauses
+# `js.Publish` calls until the worker drains.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orders-svc-flags
+data:
+  publish_enabled: "true"
