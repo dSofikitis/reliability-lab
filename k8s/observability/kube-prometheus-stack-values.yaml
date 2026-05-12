@@ -1,0 +1,78 @@
+# Helm values for prometheus-community/kube-prometheus-stack.
+# Installed by `make obs-install`. The defaults from the chart are
+# fine for everything except: scrape config for our pod annotations,
+# AlertManager webhook pointing at the remediation-operator, and the
+# Grafana dashboard sidecar reading from the configmap label below.
+
+grafana:
+  adminPassword: admin                # local-only default; gke overlay
+                                      # overrides via a sealed secret.
+  defaultDashboardsEnabled: false     # we only want our own dashboards
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: reliability-lab
+    datasources:
+      enabled: true
+  service:
+    type: NodePort
+    nodePort: 31300                   # http://localhost:31300 on kind
+
+prometheus:
+  prometheusSpec:
+    # Pick up any rule files labelled this way — the SLO rules in
+    # k8s/prometheus/rules/ ship as ConfigMaps with this label so
+    # they're tracked by the kube-prometheus-stack rule reload loop.
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector:
+      matchLabels:
+        prometheus: kube-prometheus
+        role: alert-rules
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # Honour the prometheus.io/* annotations on the app pods so the
+    # scrape works before the ServiceMonitors land in phase 6.
+    additionalScrapeConfigs:
+      - job_name: 'reliability-lab-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [reliability-lab]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+alertmanager:
+  config:
+    route:
+      receiver: 'remediation-operator'
+      group_by: ['slo', 'service']
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 5m
+    receivers:
+      - name: 'remediation-operator'
+        webhook_configs:
+          # The operator's webhook server lives in the same cluster.
+          # On a real cluster this URL is in the operator namespace,
+          # on kind it resolves to the same in-cluster DNS.
+          - url: http://remediation-operator.reliability-lab.svc.cluster.local:8088/alerts
+            send_resolved: true

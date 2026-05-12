@@ -1,0 +1,115 @@
+# Orders SLO — 99.5% of POST /orders return 2xx within 300 ms,
+# measured over a rolling 30-day window. Error budget: 0.5%
+# (≈ 3.6 h of badness allowed per 30 days).
+#
+# Implements the Google SRE-book multi-window multi-burn-rate
+# pattern (chapter 3 of "Site Reliability Engineering"):
+#
+#   - Fast burn:  1h window @ 14.4× budget burn  (2% spent in 1h)
+#   - Slow burn:  6h window @  6×  budget burn  (5% spent in 6h)
+#
+# Both windows must trip simultaneously before the alert fires. The
+# "AND" of the two windows kills false positives from brief blips
+# while still catching a slow regression within a few hours.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: orders-slo
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: orders-slo.rules
+      interval: 30s
+      rules:
+        # Success ratio: fraction of inbound requests classified
+        # "success" by the Linkerd proxy on the orders-svc pod. The
+        # mesh classifies a request as success iff response code
+        # < 500 AND not a connect failure. 4xx counts as success on
+        # purpose — those are client-side errors, not service ones.
+        - record: slo:orders_success_ratio:rate1h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="orders-svc",
+              classification="success"}[1h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="orders-svc"}[1h]))
+        - record: slo:orders_success_ratio:rate6h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="orders-svc",
+              classification="success"}[6h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="orders-svc"}[6h]))
+
+        # Burn rate = unavailability divided by the budget. With a
+        # 99.5% SLO the budget is 0.005, so a 1h burn rate of 14.4
+        # means we're consuming budget 14.4× faster than steady
+        # state. At that rate the full 30-day budget is gone in
+        # ~50 hours.
+        - record: slo:orders_burn_rate:1h
+          expr: (1 - slo:orders_success_ratio:rate1h) / 0.005
+        - record: slo:orders_burn_rate:6h
+          expr: (1 - slo:orders_success_ratio:rate6h) / 0.005
+
+        # Latency SLO: p99 inbound latency under 300 ms over the
+        # short window. Tracked separately from availability so a
+        # latency regression with no error increase still pages.
+        - record: slo:orders_latency_p99_ms:5m
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(
+                linkerd_response_latency_ms_seconds_bucket{
+                  direction="inbound", deployment="orders-svc"}[5m])))
+
+      # ───── alerts ─────
+        - alert: OrdersSLOFastBurn
+          expr: |
+            slo:orders_burn_rate:1h > 14.4
+            and
+            slo:orders_burn_rate:6h > 6
+          for: 2m
+          labels:
+            severity: page
+            slo: orders_availability
+            service: orders
+            burn_speed: fast
+          annotations:
+            summary: "orders SLO: fast burn — 2% of 30-day budget spent in 1h"
+            description: |
+              orders-svc is consuming its error budget 14.4× faster
+              than steady state. At this rate the 30-day budget
+              clears in 50h. The remediation-operator should pick
+              a rollback or scale remedy depending on the upstream
+              signal (payments p99 vs inventory error rate).
+            runbook: docs/runbooks/orders-fast-burn.md
+
+        - alert: OrdersSLOSlowBurn
+          expr: |
+            slo:orders_burn_rate:6h > 6
+            and
+            slo:orders_burn_rate:1h > 1
+          for: 15m
+          labels:
+            severity: ticket
+            slo: orders_availability
+            service: orders
+            burn_speed: slow
+          annotations:
+            summary: "orders SLO: slow burn — 5% of 30-day budget spent in 6h"
+            runbook: docs/runbooks/orders-slow-burn.md
+
+        - alert: OrdersLatencyHigh
+          expr: slo:orders_latency_p99_ms:5m > 300
+          for: 5m
+          labels:
+            severity: page
+            slo: orders_latency
+            service: orders
+          annotations:
+            summary: "orders p99 latency > 300 ms (SLO threshold)"
+            runbook: docs/runbooks/orders-latency.md

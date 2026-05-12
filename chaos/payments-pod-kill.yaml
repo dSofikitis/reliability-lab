@@ -1,0 +1,23 @@
+# payments-pod-kill: kill a random payments-svc pod every 30s for
+# 3 minutes. The point isn't to break the SLO — Linkerd retries
+# transparently and the HPA's baseline 2 replicas absorbs the
+# churn. The point is to demonstrate that the rest of the SLO
+# story still works even when pods are coming and going. The
+# operator should NOT fire any remedy here; if it does, that's a
+# false positive worth catching.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: payments-pod-kill
+  namespace: reliability-lab
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [reliability-lab]
+    labelSelectors:
+      app: payments-svc
+  scheduler:
+    cron: "@every 30s"
+  duration: 3m

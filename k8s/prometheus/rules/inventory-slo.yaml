@@ -1,0 +1,53 @@
+# Inventory SLO — 99.9% availability over 30 days. Same shape as the
+# payments SLO. The chaos experiment that targets this service
+# (chaos/inventory-network-drop.yaml) is the canonical trigger for
+# the operator's HPA-scale remedy on payments-svc.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: inventory-slo
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: inventory-slo.rules
+      interval: 30s
+      rules:
+        - record: slo:inventory_success_ratio:rate1h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="inventory-svc",
+              classification="success"}[1h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="inventory-svc"}[1h]))
+        - record: slo:inventory_success_ratio:rate6h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="inventory-svc",
+              classification="success"}[6h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="inventory-svc"}[6h]))
+
+        - record: slo:inventory_burn_rate:1h
+          expr: (1 - slo:inventory_success_ratio:rate1h) / 0.001
+        - record: slo:inventory_burn_rate:6h
+          expr: (1 - slo:inventory_success_ratio:rate6h) / 0.001
+
+        - alert: InventorySLOFastBurn
+          expr: |
+            slo:inventory_burn_rate:1h > 14.4
+            and
+            slo:inventory_burn_rate:6h > 6
+          for: 2m
+          labels:
+            severity: page
+            slo: inventory_availability
+            service: inventory
+            burn_speed: fast
+          annotations:
+            summary: "inventory SLO: fast burn — retry storm upstream is likely"
+            runbook: docs/runbooks/inventory-fast-burn.md

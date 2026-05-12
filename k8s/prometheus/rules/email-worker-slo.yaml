@@ -1,0 +1,68 @@
+# Email delivery SLO — 99% of messages on orders.events.created are
+# acked within 60 s of arrival. Measured at the JetStream consumer
+# end via NATS' built-in metrics. Budget: 1% = ~7.2 h per 30 days.
+# Looser SLO than the synchronous services because email is the
+# async tail of the chain — short delays are tolerable.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: email-worker-slo
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: email-worker-slo.rules
+      interval: 30s
+      rules:
+        # nats_consumer_num_pending is the JetStream-side count of
+        # messages awaiting delivery. We treat "pending" as a proxy
+        # for "age" — if pending > N for too long, by Little's law
+        # the average wait exceeds the 60s SLO at this consumer rate.
+        - record: slo:email_pending_steady_state
+          expr: |
+            avg_over_time(nats_consumer_num_pending{
+              consumer_name="email-worker"}[1h])
+
+        # The "violated SLO" expression: more than 100 pending for
+        # more than 1 minute at the current ack rate implies
+        # backlog wait > 60s.
+        - record: slo:email_delivery_violation:rate1h
+          expr: |
+            (
+              avg_over_time(nats_consumer_num_pending{
+                consumer_name="email-worker"}[5m]) > 100
+            )
+
+        - alert: EmailWorkerBacklogGrowing
+          expr: |
+            nats_consumer_num_pending{consumer_name="email-worker"} > 500
+            and
+            deriv(nats_consumer_num_pending{
+              consumer_name="email-worker"}[5m]) > 0
+          for: 2m
+          labels:
+            severity: page
+            slo: email_delivery_within_60s
+            service: email-worker
+          annotations:
+            summary: "email-worker backlog > 500 and growing"
+            description: |
+              The consumer is falling behind. The operator's
+              circuit-break remedy will toggle orders-svc publishing
+              to drain the queue while the worker catches up.
+            runbook: docs/runbooks/email-worker-backlog.md
+
+        - alert: EmailWorkerOOMRestart
+          expr: |
+            increase(kube_pod_container_status_restarts_total{
+              namespace="reliability-lab", pod=~"email-worker-.*"}[10m]) > 1
+          for: 0m
+          labels:
+            severity: page
+            slo: email_delivery_within_60s
+            service: email-worker
+          annotations:
+            summary: "email-worker restarted (likely OOM)"
+            runbook: docs/runbooks/email-worker-oom.md

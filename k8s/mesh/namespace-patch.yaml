@@ -1,0 +1,12 @@
+# Layered on top of base/namespace.yaml once the mesh is installed.
+# Applying this without the Linkerd control plane present will leave
+# pods waiting on the sidecar injector webhook — the make target
+# orders them correctly.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reliability-lab
+  annotations:
+    linkerd.io/inject: enabled
+    config.linkerd.io/proxy-cpu-request: "20m"
+    config.linkerd.io/proxy-memory-request: "20Mi"

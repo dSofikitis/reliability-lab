@@ -1,0 +1,76 @@
+# Payments SLO — 99.9% availability over 30 days. Tighter than the
+# orders SLO because the payments chain is shared by every order —
+# a payments outage takes orders down with it. Budget is 0.1% =
+# ~43 minutes of badness per 30 days.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: payments-slo
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: payments-slo.rules
+      interval: 30s
+      rules:
+        - record: slo:payments_success_ratio:rate1h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="payments-svc",
+              classification="success"}[1h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="payments-svc"}[1h]))
+        - record: slo:payments_success_ratio:rate6h
+          expr: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="payments-svc",
+              classification="success"}[6h]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="payments-svc"}[6h]))
+
+        # Same burn-rate factors as the orders SLO, but the budget
+        # here is 0.001 (99.9% SLO) — so the threshold expressions
+        # divide by a smaller number and trip harder for the same
+        # underlying failure ratio.
+        - record: slo:payments_burn_rate:1h
+          expr: (1 - slo:payments_success_ratio:rate1h) / 0.001
+        - record: slo:payments_burn_rate:6h
+          expr: (1 - slo:payments_success_ratio:rate6h) / 0.001
+
+        - alert: PaymentsSLOFastBurn
+          expr: |
+            slo:payments_burn_rate:1h > 14.4
+            and
+            slo:payments_burn_rate:6h > 6
+          for: 2m
+          labels:
+            severity: page
+            slo: payments_availability
+            service: payments
+            burn_speed: fast
+          annotations:
+            summary: "payments SLO: fast burn"
+            description: |
+              The most common cause is the inventory retry storm —
+              the operator's HPA-scale remedy responds to this
+              signal by raising payments-svc minReplicas.
+            runbook: docs/runbooks/payments-fast-burn.md
+
+        - alert: PaymentsSLOSlowBurn
+          expr: |
+            slo:payments_burn_rate:6h > 6
+            and
+            slo:payments_burn_rate:1h > 1
+          for: 15m
+          labels:
+            severity: ticket
+            slo: payments_availability
+            service: payments
+            burn_speed: slow
+          annotations:
+            summary: "payments SLO: slow burn"
+            runbook: docs/runbooks/payments-slow-burn.md

@@ -1,0 +1,30 @@
+# inventory-network-drop: drop 20% of packets between payments-svc
+# and inventory-svc for 4 minutes. The retry loop in payments-svc
+# does a couple of fast retries before giving up, which amplifies
+# load on inventory by ~3× during the drop — this is the "retry
+# storm" the inventory SLO and the HPA-scale remedy are designed
+# around.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: inventory-network-drop
+  namespace: reliability-lab
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [reliability-lab]
+    labelSelectors:
+      app: inventory-svc
+  direction: from
+  target:
+    mode: all
+    selector:
+      namespaces: [reliability-lab]
+      labelSelectors:
+        app: payments-svc
+  loss:
+    loss: "20"
+    correlation: "25"
+  duration: 4m

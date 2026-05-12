@@ -73,14 +73,30 @@ apply: ## kubectl apply -k k8s/overlays/$(CLUSTER)
 
 ##@ Stack installs (phase 5-11)
 .PHONY: mesh-install obs-install chaos-install rollouts-install policy-install
-mesh-install: ## Install Linkerd CRDs + control plane.
-	@echo "[phase 5] linkerd install not yet wired"
+mesh-install: ## Install Linkerd CRDs + control plane + viz, then inject the namespace.
+	linkerd install --crds | kubectl apply -f -
+	linkerd install | kubectl apply -f -
+	linkerd check
+	linkerd viz install | kubectl apply -f -
+	kubectl apply -f k8s/mesh/namespace-patch.yaml
 
-obs-install: ## Install kube-prometheus-stack + Grafana dashboards.
-	@echo "[phase 6] observability install not yet wired"
+obs-install: ## Install kube-prometheus-stack, OTel collector, and SLO rules.
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	helm repo update
+	helm upgrade --install kube-prometheus prometheus-community/kube-prometheus-stack \
+	  --namespace monitoring --create-namespace \
+	  -f k8s/observability/kube-prometheus-stack-values.yaml
+	kubectl apply -n reliability-lab -f k8s/observability/otel-collector.yaml
+	kubectl apply -n monitoring -f k8s/prometheus/rules/
 
 chaos-install: ## Install chaos-mesh CRDs + control plane.
-	@echo "[phase 8] chaos-mesh install not yet wired"
+	helm repo add chaos-mesh https://charts.chaos-mesh.org
+	helm repo update
+	kubectl create ns chaos-mesh --dry-run=client -o yaml | kubectl apply -f -
+	helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
+	  --namespace chaos-mesh \
+	  --set chaosDaemon.runtime=containerd \
+	  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
 
 rollouts-install: ## Install Argo Rollouts CRDs + controller.
 	@echo "[phase 10] argo rollouts install not yet wired"
@@ -97,7 +113,8 @@ mttr-drill: ## Chaos → SLO burn → operator remedy → SLO recovery, narrated
 	@echo "[phase 13] mttr-drill not yet wired"
 
 chaos-run: ## Apply a single chaos experiment: make chaos-run EXP=payments-latency
-	@echo "[phase 8] chaos-run not yet wired"
+	@test -n "$(EXP)" || { echo "usage: make chaos-run EXP=payments-latency" >&2; exit 1; }
+	kubectl apply -f chaos/$(EXP).yaml
 
 slo-check: ## Tail Prometheus for the SLO recording rule values.
 	@echo "[phase 7] slo-check not yet wired"

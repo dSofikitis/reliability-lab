@@ -1,0 +1,24 @@
+# email-worker-oom: starve the consumer of CPU while orders-svc
+# keeps publishing. The backlog grows, in-flight message memory
+# climbs past the 128Mi pod limit, OOM-killer fires. The combined
+# signal "backlog > 500 and pod restarted" trips the
+# EmailWorkerBacklogGrowing + EmailWorkerOOMRestart alerts, which
+# is what the operator's circuit-break remedy classifies as a
+# "pause the publisher" event.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: email-worker-cpu-stress
+  namespace: reliability-lab
+spec:
+  mode: all
+  selector:
+    namespaces: [reliability-lab]
+    labelSelectors:
+      app: email-worker
+  stressors:
+    cpu:
+      workers: 2
+      load: 95
+  duration: 6m

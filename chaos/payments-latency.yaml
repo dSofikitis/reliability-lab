@@ -1,0 +1,28 @@
+# payments-latency: inject 500ms of latency on 50% of payments-svc
+# inbound traffic for 5 minutes. This is the canonical experiment
+# that exercises the orders SLO and the operator's rollback remedy.
+#
+# Why 500ms × 50%? At steady-state payments p99 is ~25ms, orders
+# p99 is ~40ms. Adding 500ms to half the traffic pushes orders p99
+# to ~250ms+ within 30s, just below the 300ms SLO threshold;
+# combined with the inevitable retry overhead it breaks the SLO
+# cleanly without being so extreme that the alert is uninteresting.
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: payments-latency
+  namespace: reliability-lab
+spec:
+  action: delay
+  mode: fixed-percent
+  value: "50"
+  selector:
+    namespaces: [reliability-lab]
+    labelSelectors:
+      app: payments-svc
+  delay:
+    latency: 500ms
+    correlation: "25"
+    jitter: 50ms
+  duration: 5m
