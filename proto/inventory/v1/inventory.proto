@@ -9,7 +9,7 @@ package inventory.v1;
 // service drops a percentage of Reserve calls, which exercises the
 // retry path in payments-svc — the retry storm is what the
 // remediation operator's "scale HPA" remedy is for.
-service Inventory {
+service InventoryService {
   rpc Reserve(ReserveRequest) returns (ReserveResponse);
   rpc Release(ReleaseRequest) returns (ReleaseResponse);
 }
@@ -25,8 +25,8 @@ message ReserveResponse {
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
-    OK = 1;
-    OUT_OF_STOCK = 2;
+    STATUS_OK = 1;
+    STATUS_OUT_OF_STOCK = 2;
   }
 }
 

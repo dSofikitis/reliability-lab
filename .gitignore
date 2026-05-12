@@ -6,8 +6,8 @@ vendor/
 *.out
 coverage.out
 
-# Generated proto code
-gen/
+# Generated proto code is committed (so `go build` works without buf).
+# Regenerate with `make proto`.
 
 # Terraform
 .terraform/

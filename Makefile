@@ -35,17 +35,24 @@ proto: proto-lint ## Regenerate Go from proto/ via buf into gen/go.
 proto-lint: ## buf lint + breaking-change check against main.
 	cd proto && buf lint
 
-build: ## go build ./... for every service and the operator.
-	@echo "[phase 3] go build not yet wired"
+build: ## go build every service binary into bin/.
+	@mkdir -p bin
+	@for svc in $(SERVICES); do \
+	  echo "build $$svc"; \
+	  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/$$svc ./services/$$svc; \
+	done
 
 test: ## go test ./... for every service and the operator.
-	@echo "[phase 3] go test not yet wired"
+	go test ./...
 
-lint: ## golangci-lint + buf lint.
-	@echo "[phase 3] lint not yet wired"
+lint: proto-lint ## go vet + buf lint.
+	go vet ./...
 
-images: ## docker build + load every service image into kind.
-	@echo "[phase 3] docker build not yet wired"
+images: ## docker build every service image and tag with $(IMAGE_TAG).
+	@for svc in $(SERVICES); do \
+	  echo "image $$svc"; \
+	  docker build -f services/$$svc/Dockerfile -t $(IMAGE_REGISTRY)/$$svc:$(IMAGE_TAG) .; \
+	done
 
 ##@ Cluster (phase 4)
 .PHONY: kind-up kind-down apply

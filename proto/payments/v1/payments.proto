@@ -7,7 +7,7 @@ package payments.v1;
 // the chaos experiments simulate slow upstream banks, intermittent
 // declines, and full outages — each of which surfaces as a distinct
 // SLO violation downstream in orders.
-service Payments {
+service PaymentsService {
   rpc Charge(ChargeRequest) returns (ChargeResponse);
 }
 
@@ -27,7 +27,7 @@ message ChargeResponse {
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
-    AUTHORIZED = 1;
-    DECLINED = 2;
+    STATUS_AUTHORIZED = 1;
+    STATUS_DECLINED = 2;
   }
 }
