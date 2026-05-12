@@ -1,0 +1,44 @@
+# Go
+bin/
+dist/
+vendor/
+*.test
+*.out
+coverage.out
+
+# Generated proto code
+gen/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+.terraformrc
+terraform.rc
+
+# Kubernetes / Helm
+*.kubeconfig
+kubeconfig
+charts/*/charts/
+charts/*/Chart.lock
+
+# Tooling
+.tools/
+.cache/
+.local/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
