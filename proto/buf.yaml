@@ -1,0 +1,15 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # Single-package-per-directory is the right rule for this monorepo,
+    # but we deliberately use `v1` suffix on the package to make
+    # breaking-change windows explicit. STANDARD already requires this,
+    # so no exemption needed — kept here as the place to document any
+    # future exceptions.
+breaking:
+  use:
+    - FILE

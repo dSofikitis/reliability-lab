@@ -28,9 +28,12 @@ tools: ## Install kind / kubectl / kustomize / helm / linkerd / cosign / trivy /
 	@bash scripts/install-tools.sh
 
 ##@ Build (phase 2-3)
-.PHONY: proto build test lint images
-proto: ## Regenerate Go from proto/ via buf.
-	@echo "[phase 2] proto generation not yet wired"
+.PHONY: proto proto-lint build test lint images
+proto: proto-lint ## Regenerate Go from proto/ via buf into gen/go.
+	cd proto && buf generate
+
+proto-lint: ## buf lint + breaking-change check against main.
+	cd proto && buf lint
 
 build: ## go build ./... for every service and the operator.
 	@echo "[phase 3] go build not yet wired"

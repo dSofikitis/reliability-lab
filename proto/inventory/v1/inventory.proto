@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+// The inventory service reserves and releases SKUs for an order.
+// Reserve is the call payments-svc makes after a successful charge;
+// Release is the compensating call orders-svc makes on a refund or a
+// timed-out reservation. The chaos experiment that targets this
+// service drops a percentage of Reserve calls, which exercises the
+// retry path in payments-svc — the retry storm is what the
+// remediation operator's "scale HPA" remedy is for.
+service Inventory {
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+}
+
+message ReserveRequest {
+  string order_id = 1;
+  repeated LineItem items = 2;
+}
+
+message ReserveResponse {
+  string reservation_id = 1;
+  Status status = 2;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    OK = 1;
+    OUT_OF_STOCK = 2;
+  }
+}
+
+message ReleaseRequest {
+  string reservation_id = 1;
+}
+
+message ReleaseResponse {
+  bool released = 1;
+}
+
+message LineItem {
+  string sku = 1;
+  int32 quantity = 2;
+}

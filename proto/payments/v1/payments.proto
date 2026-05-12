@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package payments.v1;
+
+// The payments service authorizes a single charge against an order.
+// In Reliability Lab this is the most failure-prone hop in the chain:
+// the chaos experiments simulate slow upstream banks, intermittent
+// declines, and full outages — each of which surfaces as a distinct
+// SLO violation downstream in orders.
+service Payments {
+  rpc Charge(ChargeRequest) returns (ChargeResponse);
+}
+
+message ChargeRequest {
+  string order_id = 1;
+  string customer_id = 2;
+  // Amount in minor currency units (cents, pence, etc.) — avoids
+  // float-rounding bugs at SLO-counting time.
+  int64 amount_minor = 3;
+  string currency = 4;
+}
+
+message ChargeResponse {
+  string payment_id = 1;
+  Status status = 2;
+  string decline_reason = 3;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    AUTHORIZED = 1;
+    DECLINED = 2;
+  }
+}
