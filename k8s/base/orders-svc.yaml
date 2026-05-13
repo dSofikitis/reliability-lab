@@ -1,48 +1,8 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orders-svc
-  labels: { app: orders-svc }
-spec:
-  replicas: 2
-  selector:
-    matchLabels: { app: orders-svc }
-  template:
-    metadata:
-      labels: { app: orders-svc }
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
-        prometheus.io/path: /metrics
-    spec:
-      containers:
-        - name: orders-svc
-          image: ghcr.io/dsofikitis/reliability-lab/orders-svc:dev
-          imagePullPolicy: IfNotPresent
-          ports:
-            - { name: http, containerPort: 8080 }
-          env:
-            - { name: LISTEN_ADDR_HTTP,        value: ":8080" }
-            - { name: PAYMENTS_ADDR,           value: "payments-svc:9000" }
-            - { name: NATS_URL,                value: "nats://nats:4222" }
-            - { name: NATS_SUBJECT,            value: "orders.events.created" }
-            - { name: CIRCUIT_BREAK_FLAG_FILE, value: "/etc/orders-flags/publish_enabled" }
-          readinessProbe:
-            httpGet: { path: /readyz, port: http }
-            periodSeconds: 5
-          livenessProbe:
-            httpGet: { path: /healthz, port: http }
-            periodSeconds: 10
-          resources:
-            requests: { cpu: 100m, memory: 64Mi }
-            limits:   { cpu: 1,    memory: 256Mi }
-          volumeMounts:
-            - { name: flags, mountPath: /etc/orders-flags, readOnly: true }
-      volumes:
-        - name: flags
-          configMap:
-            name: orders-svc-flags
----
+# The workload (Rollout + AnalysisTemplate) lives in
+# orders-svc-rollout.yaml — split out so the canary-strategy
+# definition is visible on its own. This file keeps the Service
+# and the circuit-break ConfigMap, which are shared infrastructure
+# the Rollout's pods plug into.
 apiVersion: v1
 kind: Service
 metadata:

@@ -7,6 +7,7 @@ resources:
   - inventory-svc.yaml
   - payments-svc.yaml
   - orders-svc.yaml
+  - orders-svc-rollout.yaml
   - email-worker.yaml
 commonLabels:
   part-of: reliability-lab

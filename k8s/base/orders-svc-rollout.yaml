@@ -1,0 +1,99 @@
+# Argo Rollout for orders-svc. Replaces the plain Deployment so the
+# remediation-operator's "rollback" remedy has a real abortable
+# canary to walk back.
+#
+# Strategy: 25% → 1m soak → 50% → analysis → 75% → 30s → 100%.
+# The analysis step queries Prometheus for the 5-minute success
+# ratio of the canary subset; below 99% the rollout aborts and
+# auto-falls back to the previous stable ReplicaSet. That same abort
+# is what the operator triggers explicitly when the upstream-burn
+# alert fires before the analysis step gets to weigh in.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: orders-svc
+  labels: { app: orders-svc }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: orders-svc }
+  strategy:
+    canary:
+      maxSurge: "25%"
+      maxUnavailable: 0
+      steps:
+        - setWeight: 25
+        - pause: { duration: 60s }
+        - setWeight: 50
+        - analysis:
+            templates:
+              - templateName: orders-success-ratio
+        - setWeight: 75
+        - pause: { duration: 30s }
+  template:
+    metadata:
+      labels: { app: orders-svc }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: orders-svc
+          image: ghcr.io/dsofikitis/reliability-lab/orders-svc:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: LISTEN_ADDR_HTTP,        value: ":8080" }
+            - { name: PAYMENTS_ADDR,           value: "payments-svc:9000" }
+            - { name: NATS_URL,                value: "nats://nats:4222" }
+            - { name: NATS_SUBJECT,            value: "orders.events.created" }
+            - { name: CIRCUIT_BREAK_FLAG_FILE, value: "/etc/orders-flags/publish_enabled" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits:   { cpu: 1,    memory: 256Mi }
+          volumeMounts:
+            - { name: flags, mountPath: /etc/orders-flags, readOnly: true }
+      volumes:
+        - name: flags
+          configMap:
+            name: orders-svc-flags
+---
+# AnalysisTemplate referenced by the Rollout's canary analysis step.
+# Fails the canary if the 5-minute success ratio of the orders-svc
+# Linkerd inbound metric drops below 99%. Threshold is intentionally
+# tighter than the SLO (99.5%) so the canary aborts BEFORE the SLO
+# alert fires — Argo Rollouts is the cheap, fast first line; the
+# operator's remediation is the second.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: orders-success-ratio
+spec:
+  args:
+    - name: service
+      value: orders-svc
+  metrics:
+    - name: success-ratio
+      interval: 30s
+      count: 4              # 2 minutes of evidence before deciding
+      successCondition: result[0] >= 0.99
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://kube-prometheus-prometheus.monitoring.svc:9090
+          query: |
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="{{args.service}}",
+              classification="success"}[5m]))
+            /
+            sum(rate(linkerd_request_total{
+              direction="inbound", deployment="{{args.service}}"}[5m]))
