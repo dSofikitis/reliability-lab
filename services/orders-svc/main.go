@@ -164,6 +164,13 @@ func main() {
 		subject: subject,
 	}
 
+	flagFile := envOr("CIRCUIT_BREAK_FLAG_FILE", "/etc/orders-flags/publish_enabled")
+	go func() {
+		if err := watchCircuitBreak(ctx, log, flagFile, &a.publishingPaused); err != nil {
+			log.Error("circuit-break watcher", "err", err)
+		}
+	}()
+
 	mux := obs.Mux(reg, health)
 	mux.Handle("POST /orders", otelhttp.NewHandler(http.HandlerFunc(a.handleCreate), "POST /orders"))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {

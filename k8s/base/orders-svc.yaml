@@ -22,10 +22,11 @@ spec:
           ports:
             - { name: http, containerPort: 8080 }
           env:
-            - { name: LISTEN_ADDR_HTTP, value: ":8080" }
-            - { name: PAYMENTS_ADDR,    value: "payments-svc:9000" }
-            - { name: NATS_URL,         value: "nats://nats:4222" }
-            - { name: NATS_SUBJECT,     value: "orders.events.created" }
+            - { name: LISTEN_ADDR_HTTP,        value: ":8080" }
+            - { name: PAYMENTS_ADDR,           value: "payments-svc:9000" }
+            - { name: NATS_URL,                value: "nats://nats:4222" }
+            - { name: NATS_SUBJECT,            value: "orders.events.created" }
+            - { name: CIRCUIT_BREAK_FLAG_FILE, value: "/etc/orders-flags/publish_enabled" }
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
@@ -35,6 +36,12 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 64Mi }
             limits:   { cpu: 1,    memory: 256Mi }
+          volumeMounts:
+            - { name: flags, mountPath: /etc/orders-flags, readOnly: true }
+      volumes:
+        - name: flags
+          configMap:
+            name: orders-svc-flags
 ---
 apiVersion: v1
 kind: Service
