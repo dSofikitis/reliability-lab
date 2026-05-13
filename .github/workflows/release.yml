@@ -1,0 +1,98 @@
+# Release: build, scan, sign, attest. The full supply-chain story
+# from source to signed artifact. Triggered on tag push so a
+# version cut is the explicit signal "ship this".
+#
+#   1. Build the image with buildx + push to GHCR
+#   2. Trivy scan; HIGH+ CVEs gate the merge
+#   3. Cosign sign keyless against the GitHub OIDC token (no
+#      long-lived keys to rotate)
+#   4. Attach SLSA-style provenance attestation to the image
+#
+# The Kyverno verifyImages ClusterPolicy in k8s/policy/ admits only
+# images whose signature subject matches THIS workflow file on main.
+# Changing the workflow path or branch breaks the chain — by design.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write       # push to GHCR
+  id-token: write       # OIDC token for Cosign keyless
+  attestations: write   # provenance attestation
+
+jobs:
+  build-sign:
+    name: build, sign, attest
+    runs-on: ubuntu-latest
+    strategy:
+      # Per-component matrix so each image gets its own job +
+      # signature. One bad service doesn't block the others, and the
+      # signature subject is per-image so verifyImages policies can
+      # be tightened per component if ever needed.
+      matrix:
+        component:
+          - { name: orders-svc,            dockerfile: services/orders-svc/Dockerfile }
+          - { name: payments-svc,          dockerfile: services/payments-svc/Dockerfile }
+          - { name: inventory-svc,         dockerfile: services/inventory-svc/Dockerfile }
+          - { name: email-worker,          dockerfile: services/email-worker/Dockerfile }
+          - { name: remediation-operator,  dockerfile: operator/Dockerfile }
+    env:
+      REGISTRY: ghcr.io
+      IMAGE: ghcr.io/${{ github.repository_owner }}/reliability-lab/${{ matrix.component.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: docker buildx setup
+        uses: docker/setup-buildx-action@v3
+
+      - name: build + push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.component.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
+          # provenance / sbom on by default in v6 — explicit for
+          # readability and so future readers know this is intentional.
+          provenance: true
+          sbom: true
+
+      - name: trivy scan (HIGH+ gates the build)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true   # don't fail on CVEs that have no fix yet
+          format: table
+
+      - name: cosign install
+        uses: sigstore/cosign-installer@v3
+
+      - name: cosign sign keyless
+        # COSIGN_EXPERIMENTAL=1 is no-op on cosign 2.x but kept for
+        # compatibility with anyone running 1.x in their fork.
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+
+      - name: attach SLSA provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
