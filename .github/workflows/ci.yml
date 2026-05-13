@@ -1,0 +1,67 @@
+# Lint + test on every push and PR. The cheapest gate that catches
+# the most regressions: go vet + go test + buf lint + tflint catches
+# ~all the "I forgot to commit a generated file" / "I broke a test
+# I didn't run locally" failure modes before they merge.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go (lint + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -count=1 ./...
+      - name: gofmt check
+        # gofmt -l prints any file that needs formatting; we fail the
+        # build if the list isn't empty. -d would print the diff but
+        # the GitHub UI already does diffs better than terminal output.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  proto:
+    name: buf lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+      - name: buf lint
+        run: cd proto && buf lint
+
+  terraform:
+    name: terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.7.5'
+      - name: terraform fmt -check
+        run: cd terraform/gke-autopilot && terraform fmt -check -recursive
+      - name: terraform validate
+        # Validate doesn't need real provider credentials; init -backend=false
+        # skips backend wiring so we can validate from a clean checkout.
+        run: |
+          cd terraform/gke-autopilot
+          terraform init -backend=false -input=false
+          terraform validate
