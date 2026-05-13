@@ -19,9 +19,15 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dSofikitis/reliability-lab/pkg/obs"
 )
+
+const serviceName = "email-worker"
 
 const (
 	streamName   = "ORDER_EVENTS"
@@ -34,7 +40,7 @@ type incoming struct {
 }
 
 func main() {
-	log := obs.Logger("email-worker")
+	log := obs.Logger(serviceName)
 	health := obs.NewHealth()
 	reg := obs.Registry("email_worker")
 
@@ -44,6 +50,17 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	shutdownTrace, err := obs.InitTracing(ctx, serviceName, envOr("APP_VERSION", "dev"))
+	if err != nil {
+		log.Error("init tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
+		_ = shutdownTrace(sctx)
+	}()
 
 	nc, err := nats.Connect(natsURL, nats.MaxReconnects(-1), nats.ReconnectWait(time.Second))
 	if err != nil {
@@ -104,19 +121,33 @@ func main() {
 }
 
 func handler(log *slog.Logger) jetstream.MessageHandler {
+	tracer := otel.Tracer("github.com/dSofikitis/reliability-lab/services/email-worker")
 	return func(msg jetstream.Msg) {
+		// Stitch into the producer's trace by extracting the W3C
+		// traceparent the orders-svc publisher injected on send.
+		hdr := propagation.HeaderCarrier(msg.Headers())
+		ctx := otel.GetTextMapPropagator().Extract(context.Background(), hdr)
+		ctx, span := tracer.Start(ctx, "email-worker.process",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(attribute.String("messaging.system", "nats")),
+		)
+		defer span.End()
+
 		var evt incoming
 		if err := json.Unmarshal(msg.Data(), &evt); err != nil {
-			log.Error("decode", "err", err)
+			log.ErrorContext(ctx, "decode", "err", err)
+			span.RecordError(err)
 			_ = msg.Term()
 			return
 		}
+		span.SetAttributes(attribute.String("order.id", evt.OrderID))
 		// Simulated email send. Chaos slows the worker so the queue
 		// backs up; nothing here needs to "know" about that — the
 		// pressure is on the consumer rate, not the handler.
 		time.Sleep(100 * time.Millisecond)
 		if err := msg.Ack(); err != nil && !errors.Is(err, nats.ErrConnectionClosed) {
-			log.Error("ack", "err", err)
+			log.ErrorContext(ctx, "ack", "err", err)
+			span.RecordError(err)
 		}
 	}
 }

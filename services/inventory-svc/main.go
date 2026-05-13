@@ -12,13 +12,17 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	inventoryv1 "github.com/dSofikitis/reliability-lab/gen/go/inventory/v1"
 	"github.com/dSofikitis/reliability-lab/pkg/obs"
 )
+
+const serviceName = "inventory-svc"
 
 type server struct {
 	inventoryv1.UnimplementedInventoryServiceServer
@@ -46,23 +50,34 @@ func (s *server) Release(_ context.Context, req *inventoryv1.ReleaseRequest) (*i
 }
 
 func main() {
-	log := obs.Logger("inventory-svc")
+	log := obs.Logger(serviceName)
 	health := obs.NewHealth()
 	reg := obs.Registry("inventory")
 
 	grpcAddr := envOr("LISTEN_ADDR_GRPC", ":9000")
 	httpAddr := envOr("LISTEN_ADDR_HTTP", ":8080")
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	shutdownTrace, err := obs.InitTracing(ctx, serviceName, envOr("APP_VERSION", "dev"))
+	if err != nil {
+		log.Error("init tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
+		_ = shutdownTrace(sctx)
+	}()
+
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
 		log.Error("listen", "err", err)
 		os.Exit(1)
 	}
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	inventoryv1.RegisterInventoryServiceServer(gs, &server{store: make(map[string][]*inventoryv1.LineItem)})
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	go func() {
 		log.Info("grpc listening", "addr", grpcAddr)

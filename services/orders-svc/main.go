@@ -20,6 +20,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -27,13 +31,15 @@ import (
 	"github.com/dSofikitis/reliability-lab/pkg/obs"
 )
 
+const serviceName = "orders-svc"
+
 type orderRequest struct {
-	CustomerID     string `json:"customer_id"`
-	CustomerEmail  string `json:"customer_email"`
-	AmountMinor    int64  `json:"amount_minor"`
-	Currency       string `json:"currency"`
-	SKU            string `json:"sku"`
-	Quantity       int32  `json:"quantity"`
+	CustomerID    string `json:"customer_id"`
+	CustomerEmail string `json:"customer_email"`
+	AmountMinor   int64  `json:"amount_minor"`
+	Currency      string `json:"currency"`
+	SKU           string `json:"sku"`
+	Quantity      int32  `json:"quantity"`
 }
 
 type orderEvent struct {
@@ -87,10 +93,13 @@ func (a *app) handleCreate(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:     time.Now().UTC(),
 		}
 		payload, _ := json.Marshal(evt)
-		if _, err := a.js.Publish(ctx, a.subject, payload); err != nil {
-			// Don't fail the order if the async event publish fails —
-			// the order is authorized, the email is best-effort.
-			// In a production system this would queue for retry.
+		// Inject the active trace context into the message header so
+		// email-worker can stitch the consumer span into the same trace.
+		msg := &nats.Msg{Subject: a.subject, Data: payload, Header: nats.Header{}}
+		otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(msg.Header))
+		if _, err := a.js.PublishMsg(ctx, msg); err != nil {
+			// Don't fail the order if the async publish fails — the
+			// order is authorized; the email is best-effort.
 			_ = err
 		}
 	}
@@ -104,7 +113,7 @@ func (a *app) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	log := obs.Logger("orders-svc")
+	log := obs.Logger(serviceName)
 	health := obs.NewHealth()
 	reg := obs.Registry("orders")
 
@@ -113,7 +122,24 @@ func main() {
 	natsURL := envOr("NATS_URL", nats.DefaultURL)
 	subject := envOr("NATS_SUBJECT", "orders.events.created")
 
-	conn, err := grpc.NewClient(payAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	shutdownTrace, err := obs.InitTracing(ctx, serviceName, envOr("APP_VERSION", "dev"))
+	if err != nil {
+		log.Error("init tracing", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
+		_ = shutdownTrace(sctx)
+	}()
+
+	conn, err := grpc.NewClient(payAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		log.Error("dial payments", "err", err)
 		os.Exit(1)
@@ -139,13 +165,10 @@ func main() {
 	}
 
 	mux := obs.Mux(reg, health)
-	mux.HandleFunc("POST /orders", a.handleCreate)
+	mux.Handle("POST /orders", otelhttp.NewHandler(http.HandlerFunc(a.handleCreate), "POST /orders"))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "reliability-lab orders-svc")
 	})
-
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	health.Ready()
 	if err := obs.Serve(ctx, log, httpAddr, mux); err != nil && !errors.Is(err, context.Canceled) {
