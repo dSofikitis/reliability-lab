@@ -98,8 +98,14 @@ chaos-install: ## Install chaos-mesh CRDs + control plane.
 	  --set chaosDaemon.runtime=containerd \
 	  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
 
-rollouts-install: ## Install Argo Rollouts CRDs + controller.
-	@echo "[phase 10] argo rollouts install not yet wired"
+rollouts-install: ## Install Argo Rollouts CRDs + controller (argo helm chart).
+	helm repo add argo https://argoproj.github.io/argo-helm
+	helm repo update
+	helm upgrade --install argo-rollouts argo/argo-rollouts \
+	  --namespace argo-rollouts --create-namespace \
+	  --set dashboard.enabled=true \
+	  --set controller.metrics.serviceMonitor.enabled=false
+	kubectl -n argo-rollouts rollout status deploy/argo-rollouts
 
 policy-install: ## Install Kyverno CRDs + verifyImages cluster policy.
 	@echo "[phase 12] kyverno install not yet wired"
