@@ -1,0 +1,59 @@
+# remediation-operator workload + Service. Single replica because
+# leader election is off by default in the kind overlay and we want
+# zero ambiguity about who applied a remedy. The gke overlay can scale
+# this to 2 with --leader-elect=true once the Lease object is in play
+# (RBAC already grants leases.coordination.k8s.io for that path).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remediation-operator
+  labels: { app: remediation-operator }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: remediation-operator }
+  template:
+    metadata:
+      labels: { app: remediation-operator }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: remediation-operator
+      containers:
+        - name: manager
+          image: ghcr.io/dsofikitis/reliability-lab/remediation-operator:dev
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--webhook-addr=:8088"
+            - "--metrics-addr=:8090"
+            - "--health-probe-addr=:8091"
+            - "--leader-elect=false"
+          ports:
+            - { name: webhook, containerPort: 8088 }
+            - { name: metrics, containerPort: 8090 }
+            - { name: probes,  containerPort: 8091 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: probes }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: probes }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: remediation-operator
+spec:
+  selector: { app: remediation-operator }
+  ports:
+    - { name: webhook, port: 8088, targetPort: webhook }
+    - { name: metrics, port: 8090, targetPort: metrics }

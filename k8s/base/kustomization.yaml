@@ -9,5 +9,6 @@ resources:
   - orders-svc.yaml
   - orders-svc-rollout.yaml
   - email-worker.yaml
+  - ../operator
 commonLabels:
   part-of: reliability-lab
