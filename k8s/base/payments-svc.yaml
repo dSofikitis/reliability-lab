@@ -46,11 +46,15 @@ spec:
     - { name: grpc, port: 9000, targetPort: grpc }
     - { name: http, port: 8080, targetPort: http }
 ---
-# Scaffolded HPA — kicks in once metrics-server is installed. The
-# remediation-operator's "scale up" remedy doesn't touch the HPA min
-# directly; it patches the Deployment spec.replicas. The HPA's job
-# is to handle the gradual load curve k6 drives; the operator's job
-# is the step-function response to a chaos event.
+# HPA does two jobs:
+#   1. Steady-state autoscaling on CPU as k6 drives the load curve.
+#   2. The control surface for the operator's "scale up" remedy —
+#      the remedy bumps minReplicas (NOT spec.replicas, which the HPA
+#      would silently revert on its next reconcile). minReplicas
+#      coercion is the supported way to push the floor up; the HPA
+#      relaxes it back down on its own once load returns to normal.
+# Requires metrics-server. maxReplicas caps the operator's blast
+# radius — even on repeated alert fires it can't blow past 10 pods.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

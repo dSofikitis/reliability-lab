@@ -47,3 +47,24 @@ spec:
   ports:
     - { name: grpc, port: 9000, targetPort: grpc }
     - { name: http, port: 8080, targetPort: http }
+---
+# Inventory HPA — gives the operator's scale-up remedy a real target
+# when an inventory_availability fast-burn alert fires. Same shape as
+# payments-svc's HPA: CPU-driven steady state, minReplicas as the
+# operator's coercion knob, maxReplicas caps blast radius.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: inventory-svc
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: inventory-svc
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
