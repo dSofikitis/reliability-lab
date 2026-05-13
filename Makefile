@@ -127,10 +127,39 @@ policy-install: ## Install Kyverno CRDs + controller, then apply the verifyImage
 	kubectl -n kyverno rollout status deploy/kyverno-admission-controller
 	kubectl apply -f k8s/policy/kyverno-verify-images.yaml
 
-##@ End-to-end (phase 13+)
+##@ End-to-end
 .PHONY: demo mttr-drill chaos-run slo-check
-demo: ## Full local demo: kind → installs → apply → loadgen → open Grafana.
-	@echo "[phase 13] demo not yet wired"
+# Full local demo. Sequence matters:
+#   1. cluster + images first (everything below depends on the
+#      Kustomize apply having images to pull)
+#   2. mesh + obs + chaos + rollouts BEFORE apply, so the namespace
+#      annotation injection + CRDs (Rollout, AnalysisTemplate,
+#      PrometheusRule, Chaos*) are all known to the apiserver when
+#      our manifests reference them
+#   3. apply
+#   4. wait for pods
+#
+# Kyverno's verifyImages policy is deliberately NOT installed here:
+# kind-loaded local images don't carry Cosign signatures and the
+# policy would refuse them at admission. The policy belongs in the
+# CI / cloud path; for local laptop work we trust kind.
+demo: ## Full local demo: kind cluster + every install + manifests + readiness wait.
+	$(MAKE) kind-up
+	$(MAKE) images
+	$(MAKE) kind-load
+	$(MAKE) mesh-install
+	$(MAKE) obs-install
+	$(MAKE) chaos-install
+	$(MAKE) rollouts-install
+	$(MAKE) apply
+	@echo "waiting for pods to become ready..."
+	@kubectl wait --for=condition=Ready pods --all -n reliability-lab --timeout=240s || true
+	@echo ""
+	@echo "  Grafana:     http://localhost:31300  (admin / admin)"
+	@echo "  orders-svc:  http://localhost:31080"
+	@echo ""
+	@echo "  Drive load:  k6 run loadgen/k6/orders.js"
+	@echo "  Run drill:   make mttr-drill"
 
 mttr-drill: ## Chaos → SLO burn → operator remedy → SLO recovery, narrated.
 	@echo "[phase 13] mttr-drill not yet wired"
