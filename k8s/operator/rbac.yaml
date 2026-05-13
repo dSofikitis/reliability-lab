@@ -1,0 +1,64 @@
+# RBAC for the remediation-operator. Permissions are deliberately
+# narrow — the operator only ever acts on objects in the
+# reliability-lab namespace, so this is a Role + RoleBinding rather
+# than a ClusterRole + ClusterRoleBinding. Smaller blast radius, and
+# a malicious or buggy operator can't reach beyond its own app
+# namespace no matter what the classifier hands it.
+#
+# Each verb set maps to a single remedy:
+#   - rollouts/status:patch   -> Rollback (status.abort=true patch)
+#   - hpa:get,patch           -> ScaleUp (read minReplicas, patch up)
+#   - configmap:get,create,   -> CircuitBreak (write publish_enabled)
+#     patch
+# Plus get/list on rollouts so the controller can read the targets it
+# patches (Patch on a status subresource still requires Get on the
+# parent under standard RBAC semantics).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remediation-operator
+  namespace: reliability-lab
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediation-operator
+  namespace: reliability-lab
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  # Leader election (only used when --leader-elect=true). Cheap to
+  # grant ahead of time so an operational decision to scale to two
+  # replicas doesn't require an RBAC change first.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  # The webhook handler logs alert metadata; not strictly required
+  # for the API surface but useful for events-based observation.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remediation-operator
+  namespace: reliability-lab
+subjects:
+  - kind: ServiceAccount
+    name: remediation-operator
+    namespace: reliability-lab
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remediation-operator
