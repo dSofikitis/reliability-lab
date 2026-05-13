@@ -55,11 +55,13 @@ test: ## go test ./... for every service and the operator.
 lint: proto-lint ## go vet + buf lint.
 	go vet ./...
 
-images: ## docker build every service image and tag with $(IMAGE_TAG).
+images: ## docker build every service + operator image and tag with $(IMAGE_TAG).
 	@for svc in $(SERVICES); do \
 	  echo "image $$svc"; \
 	  docker build -f services/$$svc/Dockerfile -t $(IMAGE_REGISTRY)/$$svc:$(IMAGE_TAG) .; \
 	done
+	@echo "image remediation-operator"
+	@docker build -f operator/Dockerfile -t $(IMAGE_REGISTRY)/remediation-operator:$(IMAGE_TAG) .
 
 ##@ Cluster (phase 4)
 .PHONY: kind-up kind-down kind-load apply
@@ -69,11 +71,13 @@ kind-up: ## Create the 3-node kind cluster.
 kind-down: ## Destroy the kind cluster.
 	kind delete cluster --name reliability-lab
 
-kind-load: ## docker save + kind load every service image into the cluster.
+kind-load: ## docker save + kind load every service + operator image into the cluster.
 	@for svc in $(SERVICES); do \
 	  echo "load $$svc"; \
 	  kind load docker-image $(IMAGE_REGISTRY)/$$svc:$(IMAGE_TAG) --name reliability-lab; \
 	done
+	@echo "load remediation-operator"
+	@kind load docker-image $(IMAGE_REGISTRY)/remediation-operator:$(IMAGE_TAG) --name reliability-lab
 
 apply: ## kubectl apply -k k8s/overlays/$(CLUSTER)
 	kubectl apply -k k8s/overlays/$(CLUSTER)
