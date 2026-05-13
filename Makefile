@@ -118,8 +118,14 @@ rollouts-install: ## Install Argo Rollouts CRDs + controller (argo helm chart).
 	  --set controller.metrics.serviceMonitor.enabled=false
 	kubectl -n argo-rollouts rollout status deploy/argo-rollouts
 
-policy-install: ## Install Kyverno CRDs + verifyImages cluster policy.
-	@echo "[phase 12] kyverno install not yet wired"
+policy-install: ## Install Kyverno CRDs + controller, then apply the verifyImages cluster policy.
+	helm repo add kyverno https://kyverno.github.io/kyverno
+	helm repo update
+	helm upgrade --install kyverno kyverno/kyverno \
+	  --namespace kyverno --create-namespace \
+	  --set replicaCount=1
+	kubectl -n kyverno rollout status deploy/kyverno-admission-controller
+	kubectl apply -f k8s/policy/kyverno-verify-images.yaml
 
 ##@ End-to-end (phase 13+)
 .PHONY: demo mttr-drill chaos-run slo-check

@@ -1,0 +1,54 @@
+# Kyverno ClusterPolicy: refuse any image in the reliability-lab
+# namespace that is not signed by THIS repo's GitHub Actions OIDC
+# identity. The supply chain story is: release.yml builds an image,
+# Cosign signs it keyless against the GitHub OIDC token (no long-
+# lived keys to rotate or steal), the signature lands in the registry
+# alongside the image, and this policy refuses anything without a
+# valid signature on admission.
+#
+# Skipped (not enforced) on system namespaces and on third-party
+# infra installed by the demo (linkerd, monitoring, kyverno itself,
+# argo-rollouts, chaos-mesh) — those images are already signed by
+# their projects and verifying them all would require a per-project
+# verifier here, which is out of scope.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-reliability-lab-images
+  annotations:
+    policies.kyverno.io/title: Verify reliability-lab images via Cosign keyless
+    policies.kyverno.io/category: Supply Chain
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: |
+      Refuses pods in the reliability-lab namespace whose images
+      aren't signed by this repo's GitHub Actions OIDC identity.
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 30
+  failurePolicy: Fail
+  background: false
+  rules:
+    - name: verify-cosign-keyless
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [reliability-lab]
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/dsofikitis/reliability-lab/*"
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # The OIDC issuer is GitHub's token endpoint;
+                    # the subject pins the workflow file + ref so
+                    # only release.yml on main can produce signatures
+                    # this policy accepts.
+                    subject: "https://github.com/dSofikitis/reliability-lab/.github/workflows/release.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+          mutateDigest: true       # rewrite tag refs to digest pins
+          verifyDigest: true       # require the resolved digest to match a signature
+          required: true           # missing signature == policy fail
