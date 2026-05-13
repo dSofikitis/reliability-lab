@@ -118,6 +118,20 @@ rollouts-install: ## Install Argo Rollouts CRDs + controller (argo helm chart).
 	  --set controller.metrics.serviceMonitor.enabled=false
 	kubectl -n argo-rollouts rollout status deploy/argo-rollouts
 
+argocd-install: ## Install Argo CD and seed it with the app-of-apps Application.
+	helm repo add argo https://argoproj.github.io/argo-helm
+	helm repo update
+	helm upgrade --install argocd argo/argo-cd \
+	  --namespace argocd --create-namespace \
+	  --set server.service.type=NodePort \
+	  --set server.service.nodePortHttp=31380
+	kubectl -n argocd rollout status deploy/argocd-server
+	kubectl apply -f gitops/app-of-apps.yaml
+	@echo ""
+	@echo "  Argo CD UI: http://localhost:31380"
+	@echo "  initial admin password:"
+	@echo "    kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+
 policy-install: ## Install Kyverno CRDs + controller, then apply the verifyImages cluster policy.
 	helm repo add kyverno https://kyverno.github.io/kyverno
 	helm repo update

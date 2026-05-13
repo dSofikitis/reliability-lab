@@ -1,0 +1,26 @@
+# The four services + the operator + RBAC + Service objects, all
+# baked into k8s/overlays/kind via Kustomize. The gke overlay can be
+# selected by editing `path` to k8s/overlays/gke when wiring up the
+# cloud cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reliability-lab-workloads
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dSofikitis/reliability-lab.git
+    targetRevision: main
+    path: k8s/overlays/kind
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: reliability-lab
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

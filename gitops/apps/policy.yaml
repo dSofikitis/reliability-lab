@@ -1,0 +1,25 @@
+# Kyverno verifyImages ClusterPolicy. Cluster-scoped, so the
+# destination namespace is mostly cosmetic — Argo CD just needs
+# somewhere to attribute the resource. Picking kyverno (where the
+# admission controller lives) keeps the resource adjacent to the
+# component that enforces it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reliability-lab-policy
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dSofikitis/reliability-lab.git
+    targetRevision: main
+    path: k8s/policy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

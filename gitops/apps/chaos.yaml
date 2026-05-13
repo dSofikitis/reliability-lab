@@ -1,0 +1,27 @@
+# Chaos experiments as YAML CRDs. NOT auto-synced — chaos triggers
+# on apply, and we want the operator to fire experiments
+# deliberately, not on every git push. Setting syncPolicy to manual
+# means git is the source of truth for *which* experiments exist;
+# applying any specific one stays an explicit human action.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reliability-lab-chaos
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dSofikitis/reliability-lab.git
+    targetRevision: main
+    path: chaos
+    directory:
+      recurse: false
+      include: '*.yaml'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: reliability-lab
+  # NO automated.sync block — applying a chaos manifest immediately
+  # injects the failure into the running cluster. We want git to
+  # define the menu, not auto-serve every dish.

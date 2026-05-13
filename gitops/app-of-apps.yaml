@@ -1,0 +1,32 @@
+# Argo CD app-of-apps. Apply this once on a fresh cluster after
+# `argo-cd-install` and Argo CD will sync everything else from the
+# gitops/apps/ directory automatically. Add a new child Application
+# under gitops/apps/ and the parent will pick it up on its next sync
+# without anyone running kubectl manually.
+#
+# The repo URL is hardcoded to the public origin so this manifest
+# works even when applied by someone other than the original
+# committer (e.g. from a fresh `git clone`). If you fork, change
+# `repoURL` to your fork's URL or the parent will sync the upstream.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reliability-lab-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dSofikitis/reliability-lab.git
+    targetRevision: main
+    path: gitops/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

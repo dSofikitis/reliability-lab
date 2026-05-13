@@ -1,0 +1,25 @@
+# Prometheus recording + alerting rules. Owned by the monitoring
+# namespace because that's where kube-prometheus-stack picks them up
+# via the rule selector configured in the helm values.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reliability-lab-prom-rules
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dSofikitis/reliability-lab.git
+    targetRevision: main
+    path: k8s/prometheus/rules
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
