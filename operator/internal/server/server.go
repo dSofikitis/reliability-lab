@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -17,17 +18,25 @@ import (
 )
 
 type Config struct {
-	Addr    string
-	Client  client.Client
-	Log     logr.Logger
-	Version string
+	Addr     string
+	Client   client.Client
+	Log      logr.Logger
+	Version  string
+	Cooldown time.Duration // per-fingerprint dedupe window; default 10m if zero
 }
 
 type Server struct {
-	cfg Config
+	cfg    Config
+	dedupe *Dedupe
 }
 
-func New(cfg Config) *Server { return &Server{cfg: cfg} }
+func New(cfg Config) *Server {
+	cd := cfg.Cooldown
+	if cd <= 0 {
+		cd = 10 * time.Minute
+	}
+	return &Server{cfg: cfg, dedupe: NewDedupe(cd)}
+}
 
 // Start blocks until ctx is cancelled and the HTTP server has drained,
 // satisfying the controller-runtime manager.Runnable contract.
@@ -63,9 +72,48 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
-// handleAlert is a placeholder that 202-acks every payload so
-// AlertManager doesn't retry into a black hole during the skeleton
-// commit. Real classification + dispatch lands in subsequent commits.
-func (s *Server) handleAlert(w http.ResponseWriter, _ *http.Request) {
+// handleAlert decodes the AlertManager payload, applies fingerprint
+// dedupe so AlertManager's repeat_interval doesn't drive us in a
+// loop, and forwards each fresh firing alert to the dispatch hook.
+// Resolved alerts are logged but never trigger a remedy — the SLO
+// returning to budget is the source of truth for recovery, not a
+// webhook saying "all clear".
+//
+// Always returns 202 once the payload parses. AlertManager treats
+// non-2xx as retry-worthy, and we don't want a remedy bug to translate
+// into a retry storm of duplicate dispatches.
+func (s *Server) handleAlert(w http.ResponseWriter, r *http.Request) {
+	var p AlertManagerPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		s.cfg.Log.Error(err, "decode AlertManager payload")
+		http.Error(w, "bad payload", http.StatusBadRequest)
+		return
+	}
+	now := time.Now()
+	for _, a := range p.Alerts {
+		log := s.cfg.Log.WithValues(
+			"alertname", a.Labels["alertname"],
+			"slo", a.Labels["slo"],
+			"service", a.Labels["service"],
+			"fingerprint", a.Fingerprint,
+		)
+		if !a.Firing() {
+			log.V(1).Info("resolved alert (no remedy)")
+			continue
+		}
+		if !s.dedupe.Acquire(a.Fingerprint, now) {
+			log.V(1).Info("inside cooldown — skipping")
+			continue
+		}
+		log.Info("firing alert accepted for remedy dispatch")
+		s.dispatch(r.Context(), a)
+	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// dispatch is the seam where the classifier + remedies plug in. Kept
+// as a method on Server so subsequent commits can replace the body
+// without touching the HTTP plumbing or the dedupe.
+func (s *Server) dispatch(_ context.Context, _ Alert) {
+	// no-op until classifier + remedies land in the next commits
 }
