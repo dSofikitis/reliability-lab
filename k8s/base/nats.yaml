@@ -28,6 +28,13 @@ spec:
   template:
     metadata:
       labels: { app: nats }
+      annotations:
+        # Scrape the prometheus-nats-exporter sidecar so the
+        # nats_consumer_num_pending metric the email-worker SLO
+        # depends on actually lands in Prometheus.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7777"
+        prometheus.io/path: /metrics
     spec:
       containers:
         - name: nats
@@ -42,6 +49,22 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits:   { cpu: 500m, memory: 512Mi }
+        # Sidecar: pull JSON from NATS' /jsz + /varz + /connz
+        # endpoints and re-expose them in Prometheus format on :7777.
+        # Keeps the NATS image stock and the metrics surface honest.
+        - name: exporter
+          image: natsio/prometheus-nats-exporter:0.18.0
+          args:
+            - "-port=7777"
+            - "-connz"
+            - "-jsz=all"
+            - "-varz"
+            - "http://localhost:8222"
+          ports:
+            - { name: metrics, containerPort: 7777 }
+          resources:
+            requests: { cpu: 10m,  memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
       volumes:
         - name: conf
           configMap: { name: nats-conf }
