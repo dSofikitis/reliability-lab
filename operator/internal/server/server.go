@@ -15,14 +15,19 @@ import (
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/dSofikitis/reliability-lab/operator/internal/classifier"
+	"github.com/dSofikitis/reliability-lab/operator/internal/remedy"
 )
 
 type Config struct {
-	Addr     string
-	Client   client.Client
-	Log      logr.Logger
-	Version  string
-	Cooldown time.Duration // per-fingerprint dedupe window; default 10m if zero
+	Addr      string
+	Client    client.Client
+	Log       logr.Logger
+	Version   string
+	Cooldown  time.Duration // per-fingerprint dedupe window; default 10m if zero
+	Namespace string        // namespace remedies act in; default reliability-lab
+	Remedies  *remedy.Registry
 }
 
 type Server struct {
@@ -31,11 +36,16 @@ type Server struct {
 }
 
 func New(cfg Config) *Server {
-	cd := cfg.Cooldown
-	if cd <= 0 {
-		cd = 10 * time.Minute
+	if cfg.Cooldown <= 0 {
+		cfg.Cooldown = 10 * time.Minute
 	}
-	return &Server{cfg: cfg, dedupe: NewDedupe(cd)}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "reliability-lab"
+	}
+	if cfg.Remedies == nil {
+		cfg.Remedies = remedy.NewRegistry()
+	}
+	return &Server{cfg: cfg, dedupe: NewDedupe(cfg.Cooldown)}
 }
 
 // Start blocks until ctx is cancelled and the HTTP server has drained,
@@ -111,9 +121,27 @@ func (s *Server) handleAlert(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// dispatch is the seam where the classifier + remedies plug in. Kept
-// as a method on Server so subsequent commits can replace the body
-// without touching the HTTP plumbing or the dedupe.
-func (s *Server) dispatch(_ context.Context, _ Alert) {
-	// no-op until classifier + remedies land in the next commits
+// dispatch classifies the alert, looks up the matching remedy, and
+// runs it. Errors are logged but not propagated upward — the HTTP
+// handler always 202s once the payload parses, by design (see the
+// retry-storm comment on handleAlert).
+func (s *Server) dispatch(ctx context.Context, a Alert) {
+	d := classifier.Classify(a.Labels)
+	log := s.cfg.Log.WithValues(
+		"kind", d.Kind.String(), "target", d.Target,
+		"alertname", a.Labels["alertname"], "fingerprint", a.Fingerprint,
+	)
+	if d.Kind == classifier.NoRemedy {
+		log.Info("no remedy for alert", "reason", d.Reason)
+		return
+	}
+	in := remedy.Input{
+		Client:    s.cfg.Client,
+		Log:       log,
+		Namespace: s.cfg.Namespace,
+		Decision:  d,
+	}
+	if err := s.cfg.Remedies.Apply(ctx, in); err != nil {
+		log.Error(err, "remedy apply failed")
+	}
 }

@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	"github.com/dSofikitis/reliability-lab/operator/internal/classifier"
+	"github.com/dSofikitis/reliability-lab/operator/internal/remedy"
 	"github.com/dSofikitis/reliability-lab/operator/internal/server"
 )
 
@@ -59,11 +61,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	registry := remedy.NewRegistry()
+	registry.Register(classifier.Rollback, remedy.Rollback{})
+	registry.Register(classifier.ScaleUp, remedy.ScaleUp{})
+	registry.Register(classifier.CircuitBreak, remedy.CircuitBreak{})
+
 	srv := server.New(server.Config{
-		Addr:    webhookAddr,
-		Client:  mgr.GetClient(),
-		Log:     ctrl.Log.WithName("webhook"),
-		Version: operatorVersion,
+		Addr:     webhookAddr,
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("webhook"),
+		Version:  operatorVersion,
+		Remedies: registry,
 	})
 	if err := mgr.Add(srv); err != nil {
 		log.Error(err, "add webhook server runnable")
