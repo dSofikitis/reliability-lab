@@ -168,8 +168,8 @@ chaos-run: ## Apply a single chaos experiment: make chaos-run EXP=payments-laten
 	@test -n "$(EXP)" || { echo "usage: make chaos-run EXP=payments-latency" >&2; exit 1; }
 	kubectl apply -f chaos/$(EXP).yaml
 
-slo-check: ## Tail Prometheus for the SLO recording rule values.
-	@echo "[phase 7] slo-check not yet wired"
+slo-check: ## Tail Prometheus for the SLO recording rule values (success ratio + burn rate).
+	@bash scripts/slo-check.sh
 
 ##@ Cloud (phase 14)
 .PHONY: cloud-up cloud-down
