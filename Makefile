@@ -171,10 +171,24 @@ chaos-run: ## Apply a single chaos experiment: make chaos-run EXP=payments-laten
 slo-check: ## Tail Prometheus for the SLO recording rule values (success ratio + burn rate).
 	@bash scripts/slo-check.sh
 
-##@ Cloud (phase 14)
-.PHONY: cloud-up cloud-down
-cloud-up: ## terraform apply against terraform/gke-autopilot.
-	@echo "[phase 14] terraform apply not yet wired"
+##@ Cloud
+.PHONY: cloud-up cloud-down cloud-kubeconfig
+# GCP_PROJECT is required for cloud-up / cloud-down. Surfacing the
+# guard here rather than letting terraform error with a less obvious
+# message — the failure mode is "you forgot to set GCP_PROJECT", and
+# saying so explicitly saves a debugging cycle.
+GCP_PROJECT ?=
 
-cloud-down: ## terraform destroy.
-	@echo "[phase 14] terraform destroy not yet wired"
+cloud-up: ## Provision the GKE Autopilot cluster: terraform apply -var project_id=$(GCP_PROJECT).
+	@test -n "$(GCP_PROJECT)" || { echo "GCP_PROJECT=<project-id> is required" >&2; exit 1; }
+	cd terraform/gke-autopilot && terraform init -upgrade && terraform apply -auto-approve -var project_id=$(GCP_PROJECT)
+	@echo ""
+	@echo "  cluster ready. point kubectl at it with:"
+	@echo "    \$$(cd terraform/gke-autopilot && terraform output -raw kubeconfig_cmd)"
+
+cloud-down: ## terraform destroy the GKE Autopilot cluster.
+	@test -n "$(GCP_PROJECT)" || { echo "GCP_PROJECT=<project-id> is required" >&2; exit 1; }
+	cd terraform/gke-autopilot && terraform destroy -auto-approve -var project_id=$(GCP_PROJECT)
+
+cloud-kubeconfig: ## Print the gcloud command that wires kubectl to the cluster.
+	@cd terraform/gke-autopilot && terraform output -raw kubeconfig_cmd
