@@ -1,0 +1,105 @@
+# Smoke chaos drill: spin a kind cluster on the runner, run `make
+# demo` end-to-end, drive load with k6, fire a chaos experiment,
+# assert the operator detects + remediates + the SLO recovers under
+# the MTTR ceiling. Fails the build if any of those don't happen.
+#
+# This workflow makes the README's "auto-remediation works" bullet
+# a per-push CI gate rather than a once-in-a-while manual demo.
+# Slow (~10 minutes), but it runs on the merge queue, not on every
+# PR — see the workflow_dispatch trigger for ad-hoc runs.
+name: chaos-drill
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Re-run only when something that could affect the drill
+      # changes. Skipping it for docs-only diffs keeps signal high.
+      - 'services/**'
+      - 'operator/**'
+      - 'k8s/**'
+      - 'chaos/**'
+      - 'scripts/mttr-drill.sh'
+      - 'Makefile'
+      - '.github/workflows/chaos-drill.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    name: end-to-end MTTR drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install kind + linkerd CLI
+        run: |
+          # kind
+          curl -sSLo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          chmod +x kind && sudo mv kind /usr/local/bin/kind
+          # linkerd
+          curl -sSL https://run.linkerd.io/install | sh
+          echo "$HOME/.linkerd2/bin" >> "$GITHUB_PATH"
+
+      - uses: azure/setup-helm@v4
+      - uses: grafana/setup-k6-action@v1
+
+      - name: build images + load into kind + apply
+        # `make demo` does the whole sequence and waits for pods. We
+        # don't need it to print the URLs since this isn't a human-
+        # facing run, but the wait + apply behavior is exactly right.
+        run: make demo
+        timeout-minutes: 15
+
+      - name: drive sustained load (background)
+        # 6-minute hold gives the drill enough runway to inject chaos
+        # and see the SLO recover before the load stops. nohup +
+        # disown so the step exits while k6 keeps running.
+        run: |
+          nohup k6 run \
+            -e BASE_URL=http://localhost:31080 \
+            -e TARGET_VUS=20 -e RAMP_SEC=15 -e HOLD_SEC=360 \
+            loadgen/k6/orders.js > /tmp/k6.log 2>&1 &
+          echo $! > /tmp/k6.pid
+          # 30s warmup so the SLO has steady-state data to compare
+          # against once chaos hits.
+          sleep 30
+
+      - name: run MTTR drill
+        # Tightened timeouts vs the local default — CI runners are
+        # consistent enough that we can demand quicker recovery, and
+        # demanding it surfaces regressions before they become visible
+        # under demo conditions.
+        env:
+          TIMEOUT_ALERT: '180'
+          TIMEOUT_REMEDY: '45'
+          TIMEOUT_RECOVER: '180'
+        run: make mttr-drill
+        timeout-minutes: 8
+
+      - name: dump operator logs on failure
+        if: failure()
+        run: |
+          echo "::group::operator logs"
+          kubectl -n reliability-lab logs deploy/remediation-operator --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::alertmanager state"
+          kubectl -n monitoring exec sts/alertmanager-kube-prometheus-alertmanager -- amtool alert query || true
+          echo "::endgroup::"
+          echo "::group::k6 output"
+          tail -200 /tmp/k6.log || true
+          echo "::endgroup::"
+
+      - name: cleanup
+        if: always()
+        run: |
+          [ -f /tmp/k6.pid ] && kill "$(cat /tmp/k6.pid)" 2>/dev/null || true
+          kind delete cluster --name reliability-lab || true
