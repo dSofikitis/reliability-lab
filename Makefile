@@ -42,6 +42,13 @@ build: ## go build every service binary into bin/.
 	  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/$$svc ./services/$$svc; \
 	done
 
+operator-build: ## Build the remediation-operator binary into bin/.
+	@mkdir -p bin
+	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/remediation-operator ./operator/cmd/manager
+
+operator-test: ## go test the operator package only.
+	go test ./operator/...
+
 test: ## go test ./... for every service and the operator.
 	go test ./...
 
