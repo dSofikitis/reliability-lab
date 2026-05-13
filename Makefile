@@ -161,8 +161,8 @@ demo: ## Full local demo: kind cluster + every install + manifests + readiness w
 	@echo "  Drive load:  k6 run loadgen/k6/orders.js"
 	@echo "  Run drill:   make mttr-drill"
 
-mttr-drill: ## Chaos → SLO burn → operator remedy → SLO recovery, narrated.
-	@echo "[phase 13] mttr-drill not yet wired"
+mttr-drill: ## Chaos → SLO burn → operator remedy → SLO recovery, narrated with timestamps.
+	@bash scripts/mttr-drill.sh
 
 chaos-run: ## Apply a single chaos experiment: make chaos-run EXP=payments-latency
 	@test -n "$(EXP)" || { echo "usage: make chaos-run EXP=payments-latency" >&2; exit 1; }
