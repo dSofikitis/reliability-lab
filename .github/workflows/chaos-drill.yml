@@ -1,12 +1,18 @@
 # Smoke chaos drill: spin a kind cluster on the runner, run `make
-# demo` end-to-end, drive load with k6, fire a chaos experiment,
-# assert the operator detects + remediates + the SLO recovers under
-# the MTTR ceiling. Fails the build if any of those don't happen.
+# demo` end-to-end, drive load with k6, fire a chaos experiment, and
+# assert the operator detects + remediates the SLO breach within the
+# floor set by the recording-rule + alert + AlertManager evaluation
+# chain. Fails the build if any stage stalls.
+#
+# Validates the OPERATOR'S WIRING (alert -> classify -> remedy ->
+# kube state mutated). Full SLO recovery is *not* asserted in CI:
+# rate(...[1h]) takes ~30 min to drain even after chaos stops, and
+# adding 30 min to every CI run for a window-math curiosity isn't
+# worth it — the runbooks describe the manual recovery observation.
 #
 # This workflow makes the README's "auto-remediation works" bullet
 # a per-push CI gate rather than a once-in-a-while manual demo.
-# Slow (~10 minutes), but it runs on the merge queue, not on every
-# PR — see the workflow_dispatch trigger for ad-hoc runs.
+# Slow (~15 minutes wall), but path-filtered so docs-only PRs skip.
 name: chaos-drill
 
 on:
@@ -31,7 +37,12 @@ jobs:
   drill:
     name: end-to-end MTTR drill
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Setup is the bulk: kind boot ~30s, image build ~3-4min,
+    # helm installs ~2-3min, gateway-api + linkerd CRDs ~1min,
+    # then the drill itself can run up to ~9min on a tight floor.
+    # 35 minutes is "comfortably above worst case" without being
+    # generous enough to mask a real hang.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -60,39 +71,55 @@ jobs:
         timeout-minutes: 15
 
       - name: drive sustained load (background)
-        # 6-minute hold gives the drill enough runway to inject chaos
-        # and see the SLO recover before the load stops. nohup +
-        # disown so the step exits while k6 keeps running.
+        # 12-minute hold covers the drill's worst-case wall time
+        # with margin: preflight (60s) + alert wait (360s) + remedy
+        # log wait (60s) + remedy state wait (30s) + warmup (60s) +
+        # safety. nohup so the step exits while k6 keeps running in
+        # the background.
         run: |
           nohup k6 run \
             -e BASE_URL=http://localhost:31080 \
-            -e TARGET_VUS=20 -e RAMP_SEC=15 -e HOLD_SEC=360 \
+            -e TARGET_VUS=20 -e RAMP_SEC=15 -e HOLD_SEC=720 \
             loadgen/k6/orders.js > /tmp/k6.log 2>&1 &
           echo $! > /tmp/k6.pid
-          # 30s warmup so the SLO has steady-state data to compare
-          # against once chaos hits.
-          sleep 30
+          # 60s warmup so Linkerd metrics have settled and the drill's
+          # preflight check sees non-zero traffic immediately rather
+          # than racing the first scrape interval.
+          sleep 60
 
       - name: run MTTR drill
-        # Tightened timeouts vs the local default — CI runners are
-        # consistent enough that we can demand quicker recovery, and
-        # demanding it surfaces regressions before they become visible
-        # under demo conditions.
-        env:
-          TIMEOUT_ALERT: '180'
-          TIMEOUT_REMEDY: '45'
-          TIMEOUT_RECOVER: '180'
+        # Defaults from scripts/mttr-drill.sh apply (chaos =
+        # drill-burn.yaml, alert = OrdersSLOFastBurn, remedy =
+        # rollback on the orders-svc Rollout). The drill's own
+        # timeouts are calibrated to the for: 2m floor + scrape /
+        # eval intervals; CI uses the script defaults rather than
+        # tightening them — runners aren't reliably faster than
+        # demo clusters once you account for scheduler jitter.
         run: make mttr-drill
-        timeout-minutes: 8
+        timeout-minutes: 12
 
-      - name: dump operator logs on failure
+      - name: dump diagnostics on failure
         if: failure()
         run: |
           echo "::group::operator logs"
           kubectl -n reliability-lab logs deploy/remediation-operator --tail=200 || true
           echo "::endgroup::"
           echo "::group::alertmanager state"
-          kubectl -n monitoring exec sts/alertmanager-kube-prometheus-alertmanager -- amtool alert query || true
+          # AM statefulset name comes from the Prometheus CR; look it
+          # up by label rather than hardcoding a chart-mangled name
+          # that drifts across releases.
+          AM_POD=$(kubectl -n monitoring get pod -l app.kubernetes.io/name=alertmanager -o name | head -1)
+          [ -n "$AM_POD" ] && kubectl -n monitoring exec "$AM_POD" -c alertmanager -- amtool --alertmanager.url=http://localhost:9093 alert query || true
+          echo "::endgroup::"
+          echo "::group::firing alerts in prometheus"
+          PROM_POD=$(kubectl -n monitoring get pod -l app.kubernetes.io/name=prometheus -o name | head -1)
+          [ -n "$PROM_POD" ] && kubectl -n monitoring exec "$PROM_POD" -c prometheus -- wget -qO- 'http://localhost:9090/api/v1/alerts' || true
+          echo "::endgroup::"
+          echo "::group::pods in reliability-lab"
+          kubectl -n reliability-lab get pods -o wide || true
+          echo "::endgroup::"
+          echo "::group::orders-svc Rollout state"
+          kubectl -n reliability-lab get rollout orders-svc -o yaml || true
           echo "::endgroup::"
           echo "::group::k6 output"
           tail -200 /tmp/k6.log || true
