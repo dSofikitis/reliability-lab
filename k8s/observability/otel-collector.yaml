@@ -23,14 +23,18 @@ data:
       prometheus:
         endpoint: 0.0.0.0:8889
         namespace: rel
-      logging:
-        loglevel: info
+      # `debug` replaced `logging` in collector v0.95 (Feb 2024);
+      # v0.111 no longer ships the logging factory, so a config that
+      # still references it errors at startup and the pod loops in
+      # CrashLoopBackOff.
+      debug:
+        verbosity: normal
     service:
       pipelines:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch]
-          exporters: [logging]
+          exporters: [debug]
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, batch]
