@@ -84,8 +84,11 @@ echo "--- linkerd check (control plane health) ---"
 # Sidecar readiness is downstream of identity / destination / policy
 # being healthy; if any of them are degraded every meshed pod stalls
 # until they recover. linkerd check surfaces that in one go.
+# --wait=30s caps the per-stage retry loop; without it `linkerd check`
+# can sit on a single failing check for several minutes and exhaust
+# the make-step timeout before the rest of the dump runs.
 if command -v linkerd >/dev/null 2>&1; then
-  linkerd check 2>&1 | tail -40 || true
+  linkerd check --wait=30s 2>&1 | tail -40 || true
 else
   echo "linkerd CLI not on PATH; skipping"
 fi
