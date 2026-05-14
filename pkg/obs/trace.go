@@ -25,9 +25,20 @@ import (
 )
 
 // InitTracing configures a global TracerProvider for the calling service
-// and returns a shutdown func the caller must defer. If the OTLP endpoint
-// is unset the provider is still installed (so tracer handles work), but
-// span data is dropped at the exporter — no crash on missing collector.
+// and returns a shutdown func the caller must defer.
+//
+// If OTEL_EXPORTER_OTLP_ENDPOINT is unset, no exporter is created — the
+// SDK is installed with a no-op shutdown so tracer handles work and
+// otelhttp/otelgrpc instrumentations register, but no background gRPC
+// client retries against a non-existent collector. This matters at
+// startup: services that ran with the OTel SDK trying to dial a missing
+// endpoint were spending CPU on backoff loops while their readiness
+// probes were waiting for the main goroutine, contributing to slow
+// pod-readiness in CI runs without a wired endpoint.
+//
+// Endpoint format follows the OTel spec: "host:port" without a scheme,
+// or any of http://, https://, grpc:// — stripScheme normalises.
+// Always insecure (in-cluster traffic, mTLS comes from the mesh).
 func InitTracing(ctx context.Context, service, version string) (func(context.Context) error, error) {
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
@@ -41,11 +52,31 @@ func InitTracing(ctx context.Context, service, version string) (func(context.Con
 		return nil, fmt.Errorf("otel resource: %w", err)
 	}
 
-	opts := []otlptracegrpc.Option{otlptracegrpc.WithInsecure()}
-	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
-		opts = append(opts, otlptracegrpc.WithEndpoint(stripScheme(ep)))
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+
+	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if endpoint == "" {
+		// No collector configured — install a SDK provider without an
+		// exporter so trace span calls remain harmless no-ops, but no
+		// goroutine spins trying to reach a non-existent address.
+		tp := sdktrace.NewTracerProvider(sdktrace.WithResource(res))
+		otel.SetTracerProvider(tp)
+		return tp.Shutdown, nil
 	}
-	exp, err := otlptrace.New(ctx, otlptracegrpc.NewClient(opts...))
+
+	opts := []otlptracegrpc.Option{
+		otlptracegrpc.WithInsecure(),
+		otlptracegrpc.WithEndpoint(stripScheme(endpoint)),
+	}
+	// Bound the exporter creation. otlptracegrpc.New is documented as
+	// non-blocking under modern gRPC, but a bounded ctx is a safety
+	// net for any future SDK change that re-introduces a startup dial.
+	startCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	exp, err := otlptrace.New(startCtx, otlptracegrpc.NewClient(opts...))
 	if err != nil {
 		return nil, fmt.Errorf("otel exporter: %w", err)
 	}
@@ -56,10 +87,6 @@ func InitTracing(ctx context.Context, service, version string) (func(context.Con
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(samplingRatio()))),
 	)
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
 
 	return tp.Shutdown, nil
 }

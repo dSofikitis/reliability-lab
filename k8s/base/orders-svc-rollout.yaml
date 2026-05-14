@@ -46,11 +46,12 @@ spec:
           ports:
             - { name: http, containerPort: 8080 }
           env:
-            - { name: LISTEN_ADDR_HTTP,        value: ":8080" }
-            - { name: PAYMENTS_ADDR,           value: "payments-svc:9000" }
-            - { name: NATS_URL,                value: "nats://nats:4222" }
-            - { name: NATS_SUBJECT,            value: "orders.events.created" }
-            - { name: CIRCUIT_BREAK_FLAG_FILE, value: "/etc/orders-flags/publish_enabled" }
+            - { name: LISTEN_ADDR_HTTP,            value: ":8080" }
+            - { name: PAYMENTS_ADDR,               value: "payments-svc:9000" }
+            - { name: NATS_URL,                    value: "nats://nats:4222" }
+            - { name: NATS_SUBJECT,                value: "orders.events.created" }
+            - { name: CIRCUIT_BREAK_FLAG_FILE,     value: "/etc/orders-flags/publish_enabled" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "otel-collector:4317" }
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
