@@ -172,14 +172,15 @@ demo: ## Full local demo: kind cluster + every install + manifests + readiness w
 	$(MAKE) chaos-install
 	$(MAKE) rollouts-install
 	$(MAKE) apply
-	@echo "waiting for pods to become ready..."
-	# Don't mask readiness failures. If a pod (operator, NATS,
-	# linkerd-injected service, anything) is stuck after 4 minutes,
-	# every downstream step — k6 load, chaos, alert, remedy —
-	# fails in less obvious ways. Better to error here, where the
-	# kubectl-wait output points at the offending pod, than to
-	# spend the next 6 minutes timing out in the drill.
-	kubectl wait --for=condition=Ready pods --all -n reliability-lab --timeout=240s
+	# Wait for pods + dump diagnostics on timeout. Delegated to a
+	# script so the Makefile stays scannable; the script extends the
+	# old inline `kubectl wait` with: a longer timeout (cold-cache CI
+	# runners need >4min for image pulls + linkerd identity bootstrap
+	# + per-pod sidecar startup), and on failure a full diagnostic
+	# dump (events, describes, container logs incl. previous-instance,
+	# linkerd check, node pressure) — so a single CI run produces
+	# enough signal to attribute the stall instead of forcing a rerun.
+	@bash scripts/wait-for-ready.sh
 	@echo ""
 	@echo "  Grafana:     http://localhost:31300  (admin / admin)"
 	@echo "  orders-svc:  http://localhost:31080"
