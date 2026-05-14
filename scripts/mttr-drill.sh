@@ -117,16 +117,22 @@ remedy_landed() {
 # Confirm the load actually reaches the backend. Without this, a
 # silent k6 misconfig (wrong BASE_URL, missing NodePort) translates
 # into "alert never fired" 5 minutes later, which is hours of CI to
-# diagnose. Prometheus telling us linkerd_request_total > 0 is the
-# load-bearing signal that everything upstream of the SLO actually
-# works.
+# diagnose. The app-side RED metric registering > 0 is the load-
+# bearing signal that everything from k6 to handler to scrape works.
+#
+# Uses the app-side counter (orders_http_requests_total) rather than
+# linkerd_request_total because kube-prometheus doesn't scrape the
+# linkerd-proxy admin port — the linkerd metric is empty here even
+# when the mesh is healthy. See pkg/obs/redmetrics.go for the
+# emitter and k8s/prometheus/rules/orders-slo.yaml for the
+# matching SLO rule.
 echo ""
 echo "===================================================="
 echo "  preflight"
 echo "===================================================="
-wait_until "linkerd_request_total registers traffic on orders-svc" \
-  "[ -n \"\$(prom_query 'sum(rate(linkerd_request_total{deployment=\"orders-svc\",direction=\"inbound\"}[1m]))')\" ] && \
-   awk \"BEGIN{exit !(\$(prom_query 'sum(rate(linkerd_request_total{deployment=\\\"orders-svc\\\",direction=\\\"inbound\\\"}[1m]))') > 0)}\"" \
+wait_until "orders_http_requests_total registers traffic on POST /orders" \
+  "[ -n \"\$(prom_query 'sum(rate(orders_http_requests_total{handler=\"post_orders\"}[1m]))')\" ] && \
+   awk \"BEGIN{exit !(\$(prom_query 'sum(rate(orders_http_requests_total{handler=\\\"post_orders\\\"}[1m]))') > 0)}\"" \
   "${TIMEOUT_PREFLIGHT}" || {
     echo "[drill] preflight failed: no traffic on orders-svc. Is k6 running and pointed at the NodePort?" >&2
     exit 1
