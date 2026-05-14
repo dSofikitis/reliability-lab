@@ -84,7 +84,13 @@ apply: ## kubectl apply -k k8s/overlays/$(CLUSTER)
 
 ##@ Stack installs (phase 5-11)
 .PHONY: mesh-install obs-install chaos-install rollouts-install policy-install
-mesh-install: ## Install Linkerd CRDs + control plane + viz, then inject the namespace.
+GATEWAY_API_VERSION ?= v1.2.1
+
+mesh-install: ## Install Gateway API CRDs + Linkerd CRDs/control plane/viz, then inject the namespace.
+	# Linkerd 2.16+ refuses to install without the upstream Gateway API
+	# CRDs already present — apply them first so `linkerd install --crds`
+	# has the schemas it needs to validate against.
+	kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	linkerd install --crds | kubectl apply -f -
 	linkerd install | kubectl apply -f -
 	linkerd check
