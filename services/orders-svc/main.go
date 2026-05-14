@@ -171,8 +171,16 @@ func main() {
 		}
 	}()
 
+	red := obs.NewHTTPMetrics(reg, "orders")
 	mux := obs.Mux(reg, health)
-	mux.Handle("POST /orders", otelhttp.NewHandler(http.HandlerFunc(a.handleCreate), "POST /orders"))
+	// Order of wrappers matters: otelhttp on the outside so trace
+	// context propagates into both the RED middleware and the
+	// handler; RED on the inside so it measures handler latency,
+	// not OTel's wrapping overhead.
+	mux.Handle("POST /orders", otelhttp.NewHandler(
+		red.Wrap("post_orders", http.HandlerFunc(a.handleCreate)),
+		"POST /orders",
+	))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "reliability-lab orders-svc")
 	})
