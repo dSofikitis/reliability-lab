@@ -22,6 +22,13 @@ grafana:
 
 prometheus:
   prometheusSpec:
+    # Tighter than the chart defaults (30s/30s) so the chaos drill
+    # can observe SLO burns within a couple of intervals rather than
+    # waiting two full scrape+eval cycles. The trade-off is more CPU
+    # spent on scraping/evaluating; on the demo footprint that cost
+    # is rounding error.
+    scrapeInterval: 15s
+    evaluationInterval: 15s
     # Pick up any rule files labelled this way — the SLO rules in
     # k8s/prometheus/rules/ ship as ConfigMaps with this label so
     # they're tracked by the kube-prometheus-stack rule reload loop.
@@ -65,7 +72,12 @@ alertmanager:
     route:
       receiver: 'remediation-operator'
       group_by: ['slo', 'service']
-      group_wait: 10s
+      # group_wait collapsed from 10s -> 1s. The dedupe layer in the
+      # operator already handles batching across re-fires; making AM
+      # wait an extra 10s before forwarding is pure latency overhead
+      # for the first alert in a group, which is the only one that
+      # actually triggers a remedy.
+      group_wait: 1s
       group_interval: 30s
       repeat_interval: 5m
     receivers:
