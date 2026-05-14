@@ -10,3 +10,15 @@ metadata:
     linkerd.io/inject: enabled
     config.linkerd.io/proxy-cpu-request: "20m"
     config.linkerd.io/proxy-memory-request: "20Mi"
+    # Run the proxy as a Kubernetes native sidecar (init container with
+    # restartPolicy=Always) so the main container only starts once the
+    # proxy reports Ready. Without this, apps that dial out at startup
+    # (orders-svc → NATS, remediation-operator → kube-apiserver) race
+    # the proxy: the connection is iptables-redirected to a proxy port
+    # that isn't bound yet, the dial fails, and the container exits
+    # before its readiness probe ever serves. Requires K8s 1.29+
+    # (kind here pins 1.31) and Linkerd 2.19+. The beta annotation
+    # is the documented key as of 2.19 (the prior alpha name still
+    # works in 2.19 but is deprecated; using beta avoids the warning
+    # and the eventual removal of the alpha name).
+    config.beta.linkerd.io/proxy-enable-native-sidecar: "true"
