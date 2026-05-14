@@ -173,7 +173,13 @@ demo: ## Full local demo: kind cluster + every install + manifests + readiness w
 	$(MAKE) rollouts-install
 	$(MAKE) apply
 	@echo "waiting for pods to become ready..."
-	@kubectl wait --for=condition=Ready pods --all -n reliability-lab --timeout=240s || true
+	# Don't mask readiness failures. If a pod (operator, NATS,
+	# linkerd-injected service, anything) is stuck after 4 minutes,
+	# every downstream step — k6 load, chaos, alert, remedy —
+	# fails in less obvious ways. Better to error here, where the
+	# kubectl-wait output points at the offending pod, than to
+	# spend the next 6 minutes timing out in the drill.
+	kubectl wait --for=condition=Ready pods --all -n reliability-lab --timeout=240s
 	@echo ""
 	@echo "  Grafana:     http://localhost:31300  (admin / admin)"
 	@echo "  orders-svc:  http://localhost:31080"
