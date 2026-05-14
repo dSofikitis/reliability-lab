@@ -1,0 +1,37 @@
+# drill-burn: 100% packet loss inbound to payments-svc for 3 minutes.
+# Designed for `make mttr-drill`: the goal is fast, deterministic
+# burn of the orders availability SLO so the operator's wiring can
+# be exercised end-to-end on a CI runner inside ~5 minutes.
+#
+# Why this shape rather than reusing payments-latency.yaml:
+#   - latency injection produces slow responses, but Linkerd
+#     classifies anything < 500 as success, so the AVAILABILITY SLO
+#     never burns from latency alone — only the latency SLO does,
+#     and that one's window + for-clause add up to >10 minutes
+#     before it can fire (too slow for a CI smoke gate).
+#   - 100% packet loss makes payments-svc unreachable, orders-svc
+#     returns 502, Linkerd inbound on orders sees the 502 as a
+#     failure, success ratio drops to ~0, burn rate spikes within
+#     two scrape intervals.
+#
+# 3-minute duration is intentionally a bit longer than the drill's
+# alert + remedy timeouts, so chaos doesn't auto-clear before the
+# operator has a chance to act. The drill explicitly deletes the
+# experiment when it's done — duration is the safety floor for the
+# "drill script crashed" case.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: drill-burn
+  namespace: reliability-lab
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [reliability-lab]
+    labelSelectors:
+      app: payments-svc
+  loss:
+    loss: "100"
+    correlation: "0"
+  duration: 3m
