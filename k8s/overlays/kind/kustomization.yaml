@@ -1,13 +1,19 @@
 # kind overlay — single-node-friendly tweaks.
 #  - imagePullPolicy: Never so kind uses the locally-loaded image
-#    instead of pulling from ghcr.io.
+#    instead of pulling from ghcr.io (where local builds aren't pushed).
 #  - replicas tuned down so a 16 GB laptop doesn't groan.
+#  - orders-svc Service patched to NodePort 31080 so traffic from the
+#    host (k6 in particular) actually reaches a pod through the kind
+#    extraPortMapping in k8s/kind-cluster.yaml.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../base
 patches:
-  - target: { kind: Deployment, name: orders-svc }
+  # orders-svc is a Rollout, not a Deployment. The patch target has
+  # to match the actual kind or kustomize silently no-ops and the
+  # Rollout keeps using its base image-pull policy.
+  - target: { group: argoproj.io, version: v1alpha1, kind: Rollout, name: orders-svc }
     patch: |-
       - op: replace
         path: /spec/replicas
@@ -33,3 +39,25 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Never
+  - target: { kind: Deployment, name: remediation-operator }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  # NodePort patch on orders-svc Service. Without this, the host's
+  # localhost:31080 hits the kind node port mapping but there's no
+  # backend service listening on the node port, so connections refuse
+  # silently — and any k6 / curl / mttr-drill that depends on driving
+  # load through it gets no traffic and the SLO can never burn.
+  - target: { kind: Service, name: orders-svc }
+    patch: |-
+      - op: replace
+        path: /spec/ports/0
+        value:
+          name: http
+          port: 8080
+          targetPort: http
+          nodePort: 31080
+      - op: add
+        path: /spec/type
+        value: NodePort

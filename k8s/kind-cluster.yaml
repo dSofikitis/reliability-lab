@@ -7,10 +7,15 @@ name: reliability-lab
 nodes:
   - role: control-plane
     extraPortMappings:
-      # Expose orders-svc via a NodePort patch on the kind overlay
-      # for `curl localhost:31080/orders`.
-      - containerPort: 31080
-        hostPort: 8080
-        protocol: TCP
+      # Expose orders-svc + Grafana + Argo CD via NodePort patches on
+      # the kind overlay. hostPort == containerPort everywhere so that
+      # the same number works inside and outside the cluster — every
+      # docs reference, README echo, k6 BASE_URL, and runbook can use
+      # one port consistently. (The previous mapping had hostPort 8080
+      # to containerPort 31080, which silently broke every "go to
+      # localhost:31080" instruction in the repo.)
+      - { containerPort: 31080, hostPort: 31080, protocol: TCP }   # orders-svc
+      - { containerPort: 31300, hostPort: 31300, protocol: TCP }   # Grafana
+      - { containerPort: 31380, hostPort: 31380, protocol: TCP }   # Argo CD UI
   - role: worker
   - role: worker
