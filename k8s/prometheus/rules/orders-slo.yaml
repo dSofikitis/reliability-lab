@@ -1,4 +1,4 @@
-# Orders SLO — 99.5% of POST /orders return 2xx within 300 ms,
+# Orders SLO — 99.5% of POST /orders return a non-5xx response,
 # measured over a rolling 30-day window. Error budget: 0.5%
 # (≈ 3.6 h of badness allowed per 30 days).
 #
@@ -11,6 +11,19 @@
 # Both windows must trip simultaneously before the alert fires. The
 # "AND" of the two windows kills false positives from brief blips
 # while still catching a slow regression within a few hours.
+#
+# Data source: app-side RED metrics emitted by orders-svc itself
+# (orders_http_requests_total), NOT the Linkerd mesh's
+# linkerd_request_total. Reason: kube-prometheus-stack scrapes the
+# service's /metrics endpoint via the prometheus.io/scrape pod
+# annotation, but it does NOT scrape the linkerd-proxy admin port,
+# and federating from linkerd-viz's own Prometheus would require
+# punching through its AuthorizationPolicy. App-side metrics are
+# the simpler, deterministic data path. The payments/inventory/
+# email-worker SLOs still reference linkerd_* and would need the
+# same treatment if they're ever exercised in CI — see
+# services/payments-svc/main.go for the gRPC equivalent of the
+# orders-svc RED middleware.
 
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -24,27 +37,25 @@ spec:
     - name: orders-slo.rules
       interval: 30s
       rules:
-        # Success ratio: fraction of inbound requests classified
-        # "success" by the Linkerd proxy on the orders-svc pod. The
-        # mesh classifies a request as success iff response code
-        # < 500 AND not a connect failure. 4xx counts as success on
-        # purpose — those are client-side errors, not service ones.
+        # Success ratio: fraction of POST /orders responses with
+        # code < 500. 4xx counts as success on purpose — those are
+        # client-side errors, not service availability hits.
+        # Matching the previous Linkerd-style classification keeps
+        # the threshold math identical.
         - record: slo:orders_success_ratio:rate1h
           expr: |
-            sum(rate(linkerd_request_total{
-              direction="inbound", deployment="orders-svc",
-              classification="success"}[1h]))
+            sum(rate(orders_http_requests_total{
+              handler="post_orders", code!~"5.."}[1h]))
             /
-            sum(rate(linkerd_request_total{
-              direction="inbound", deployment="orders-svc"}[1h]))
+            sum(rate(orders_http_requests_total{
+              handler="post_orders"}[1h]))
         - record: slo:orders_success_ratio:rate6h
           expr: |
-            sum(rate(linkerd_request_total{
-              direction="inbound", deployment="orders-svc",
-              classification="success"}[6h]))
+            sum(rate(orders_http_requests_total{
+              handler="post_orders", code!~"5.."}[6h]))
             /
-            sum(rate(linkerd_request_total{
-              direction="inbound", deployment="orders-svc"}[6h]))
+            sum(rate(orders_http_requests_total{
+              handler="post_orders"}[6h]))
 
         # Burn rate = unavailability divided by the budget. With a
         # 99.5% SLO the budget is 0.005, so a 1h burn rate of 14.4
@@ -56,15 +67,15 @@ spec:
         - record: slo:orders_burn_rate:6h
           expr: (1 - slo:orders_success_ratio:rate6h) / 0.005
 
-        # Latency SLO: p99 inbound latency under 300 ms over the
+        # Latency SLO: p99 handler latency under 300 ms over the
         # short window. Tracked separately from availability so a
         # latency regression with no error increase still pages.
         - record: slo:orders_latency_p99_ms:5m
           expr: |
             histogram_quantile(0.99,
               sum by (le) (rate(
-                linkerd_response_latency_ms_seconds_bucket{
-                  direction="inbound", deployment="orders-svc"}[5m])))
+                orders_http_request_duration_seconds_bucket{
+                  handler="post_orders"}[5m]))) * 1000
 
       # ───── alerts ─────
         - alert: OrdersSLOFastBurn
